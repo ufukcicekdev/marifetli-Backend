@@ -12,13 +12,26 @@ User = get_user_model()
 class AnswerListView(generics.ListCreateAPIView):
     serializer_class = AnswerSerializer
 
+    def get_serializer_class(self):
+        if self.request.method == 'POST':
+            return AnswerCreateSerializer
+        return AnswerSerializer
+
     def get_queryset(self):
         question_id = self.kwargs['question_id']
-        return Answer.objects.filter(question_id=question_id)
+        return Answer.objects.filter(question_id=question_id).select_related('author', 'parent')
 
     def perform_create(self, serializer):
         question_id = self.kwargs['question_id']
-        serializer.save(author=self.request.user, question_id=question_id)
+        parent = serializer.validated_data.get('parent')
+        if parent and parent.question_id != question_id:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'parent': 'Parent answer must belong to this question.'})
+        answer = serializer.save(author=self.request.user, question_id=question_id, parent=parent)
+        from questions.models import Question
+        q = Question.objects.get(pk=question_id)
+        q.answer_count = q.answers.count()
+        q.save(update_fields=['answer_count'])
 
 
 class AnswerDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -41,7 +54,11 @@ class AnswerDetailView(generics.RetrieveUpdateDestroyAPIView):
         answer = self.get_object()
         if answer.author != request.user:
             return Response({'error': 'You can only delete your own answers'}, status=status.HTTP_403_FORBIDDEN)
-        return super().destroy(request, *args, **kwargs)
+        question = answer.question
+        result = super().destroy(request, *args, **kwargs)
+        question.answer_count = question.answers.count()
+        question.save(update_fields=['answer_count'])
+        return result
 
 
 class AnswerLikeView(generics.CreateAPIView):

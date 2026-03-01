@@ -17,9 +17,11 @@ class AnswerSerializer(serializers.ModelSerializer):
 
 
 class AnswerCreateSerializer(serializers.ModelSerializer):
+    parent = serializers.PrimaryKeyRelatedField(queryset=Answer.objects.all(), required=False, allow_null=True)
+
     class Meta:
         model = Answer
-        exclude = ('author', 'like_count')
+        fields = ('content', 'parent')
 
 
 class AnswerLikeSerializer(serializers.ModelSerializer):

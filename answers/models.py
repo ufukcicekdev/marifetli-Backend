@@ -7,6 +7,7 @@ User = get_user_model()
 
 class Answer(models.Model):
     question = models.ForeignKey(Question, on_delete=models.CASCADE, related_name='answers')
+    parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.CASCADE, related_name='replies')
     author = models.ForeignKey(User, on_delete=models.CASCADE, related_name='answers')
     content = models.TextField()
     is_best_answer = models.BooleanField(default=False)
