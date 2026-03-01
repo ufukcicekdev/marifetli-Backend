@@ -29,6 +29,7 @@ urlpatterns = [
     path('api/notifications/', include('notifications.urls')),
     path('api/onboarding/', include('onboarding.urls')),
     path('api/achievements/', include('achievements.urls')),
+    path('api/favorites/', include('favorites.urls')),
     path('api-auth/', include('rest_framework.urls')),
 ]
 
