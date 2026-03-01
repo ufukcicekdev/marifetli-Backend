@@ -15,11 +15,11 @@ class TagSerializer(serializers.ModelSerializer):
 class QuestionListSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
     tags = TagSerializer(many=True, read_only=True)
-    
+
     class Meta:
         model = Question
-        fields = ('id', 'title', 'slug', 'description', 'author', 'tags', 'status', 
-                  'view_count', 'like_count', 'answer_count', 'is_resolved', 
+        fields = ('id', 'title', 'slug', 'description', 'content', 'author', 'tags', 'status',
+                  'view_count', 'like_count', 'answer_count', 'is_resolved',
                   'created_at', 'updated_at')
 
 

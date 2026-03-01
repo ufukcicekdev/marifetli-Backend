@@ -1,6 +1,6 @@
 from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
@@ -13,6 +13,7 @@ User = get_user_model()
 
 
 class QuestionListView(generics.ListCreateAPIView):
+    permission_classes = [IsAuthenticatedOrReadOnly]
     queryset = Question.objects.all()
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['author', 'status', 'tags', 'category']
@@ -36,6 +37,7 @@ class QuestionListView(generics.ListCreateAPIView):
 
 
 class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [IsAuthenticatedOrReadOnly]
     queryset = Question.objects.all()
     serializer_class = QuestionDetailSerializer
     lookup_field = 'slug'
@@ -93,6 +95,7 @@ class QuestionUnlikeView(generics.DestroyAPIView):
 
 
 class QuestionAnswersView(generics.ListAPIView):
+    permission_classes = [IsAuthenticatedOrReadOnly]
     serializer_class = AnswerSerializer
 
     def get_queryset(self):
