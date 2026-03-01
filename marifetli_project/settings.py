@@ -34,6 +34,7 @@ ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv(
 # Application definition
 
 INSTALLED_APPS = [
+    "jazzmin",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -88,6 +89,36 @@ TEMPLATES = [
         },
     },
 ]
+
+# Jazzmin (Admin tema)
+JAZZMIN_SETTINGS = {
+    "site_title": "Marifetli Admin",
+    "site_header": "Marifetli",
+    "site_brand": "Marifetli",
+    "site_logo_classes": "img-circle",
+    "welcome_sign": "Marifetli Yönetim Paneline Hoş Geldiniz",
+    "copyright": "Marifetli",
+    "search_model": ["users.user", "questions.question"],
+    "topmenu_links": [
+        {"name": "Ana Sayfa", "url": "admin:index"},
+    ],
+    "show_sidebar": True,
+    "navigation_expanded": True,
+    "hide_apps": [],
+    "hide_models": [],
+    "icons": {
+        "auth": "fas fa-users-cog",
+        "users": "fas fa-user",
+        "users.user": "fas fa-user",
+        "questions": "fas fa-question-circle",
+        "questions.question": "fas fa-question",
+        "answers": "fas fa-reply",
+        "categories": "fas fa-folder",
+        "favorites": "fas fa-bookmark",
+    },
+    "default_icon_parents": "fas fa-chevron-circle-right",
+    "default_icon_children": "fas fa-circle",
+}
 
 WSGI_APPLICATION = "marifetli_project.wsgi.application"
 
