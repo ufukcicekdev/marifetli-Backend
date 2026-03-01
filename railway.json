@@ -6,7 +6,7 @@
   },
   "deploy": {
     "preDeployCommand": "python manage.py migrate --noinput && python manage.py collectstatic --noinput",
-    "startCommand": "gunicorn marifetli_project.wsgi:application --bind 0.0.0.0:$PORT --workers 3",
+    "startCommand": "sh start.sh",
     "healthcheckPath": "/api/categories/",
     "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",
