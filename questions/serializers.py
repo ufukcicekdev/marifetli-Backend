@@ -26,10 +26,28 @@ class QuestionListSerializer(serializers.ModelSerializer):
 class QuestionDetailSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
     tags = TagSerializer(many=True, read_only=True)
-    
+
     class Meta:
         model = Question
         fields = '__all__'
+
+    def update(self, instance, validated_data):
+        tag_ids = self.initial_data.get('tags')
+        tag_names = self.initial_data.get('tag_names', [])
+        instance = super().update(instance, validated_data)
+
+        if tag_ids is not None or tag_names:
+            final_ids = list(tag_ids) if isinstance(tag_ids, (list, tuple)) else []
+            for name in tag_names or []:
+                name = (name or '').strip()
+                if name:
+                    tag = Tag.objects.filter(name__iexact=name).first()
+                    if not tag:
+                        tag = Tag.objects.create(name=name)
+                    if tag.id not in final_ids:
+                        final_ids.append(tag.id)
+            instance.tags.set(final_ids)
+        return instance
 
 
 class QuestionCreateSerializer(serializers.ModelSerializer):
