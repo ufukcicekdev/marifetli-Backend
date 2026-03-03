@@ -30,6 +30,14 @@
             color: #f97316;
             margin-bottom: 10px;
         }
+        .welcome-box {
+            background: linear-gradient(135deg, #f97316 0%, #fb923c 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            margin: 20px 0;
+        }
         .notification-box {
             background-color: #f8f9fa;
             border-left: 4px solid #f97316;
@@ -77,9 +85,12 @@
             <div class="logo">🦉 Marifetli</div>
             <h1>Bildirim</h1>
         </div>
-        
-        <p>Merhaba {{ user.username }},</p>
-        
+
+        <div class="welcome-box">
+            <h2>Merhaba {{ user.username }}! 👋</h2>
+            <p>Marifetli'de sizin için yeni bir bildirim var.</p>
+        </div>
+
         {% if notification_type %}
         <span class="notification-type">{{ notification_type }}</span>
         {% endif %}
