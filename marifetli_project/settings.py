@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     "moderation",
     "onboarding",
     "achievements",
+    "emails",
 ]
 
 MIDDLEWARE = [
@@ -310,14 +311,14 @@ SOCIAL_AUTH_PIPELINE = (
     "social_core.pipeline.social_auth.associate_user",
     "social_core.pipeline.social_auth.load_extra_data",
     "social_core.pipeline.user.user_details",
+    "users.pipeline.set_social_user_verified",
 )
 
 SOCIAL_AUTH_POSTGRES_JSONFIELD = True
 
-# Email Settings
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = "smtp.gmail.com"
-EMAIL_PORT = 587
-EMAIL_USE_TLS = True
-EMAIL_HOST_USER = "your-email@gmail.com"
-EMAIL_HOST_PASSWORD = "your-app-password"
+# Email / SMTP settings (use .env via python-decouple)
+SMTP2GO_API_KEY = config("SMTP2GO_API_KEY", default="")
+SMTP2GO_FROM_EMAIL = config("SMTP2GO_FROM_EMAIL", default="noreply@marifetli.com")
+
+# Frontend URL for email links
+FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")

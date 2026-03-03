@@ -1,8 +1,9 @@
 from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
+from core.permissions import IsVerified
 from .models import Answer, AnswerLike, AnswerReport
 from .serializers import AnswerSerializer, AnswerCreateSerializer, AnswerLikeSerializer, AnswerReportSerializer
 
@@ -11,6 +12,11 @@ User = get_user_model()
 
 class AnswerListView(generics.ListCreateAPIView):
     serializer_class = AnswerSerializer
+
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return [IsAuthenticated(), IsVerified()]
+        return [IsAuthenticatedOrReadOnly()]
 
     def get_serializer_class(self):
         if self.request.method == 'POST':
@@ -37,7 +43,11 @@ class AnswerListView(generics.ListCreateAPIView):
 class AnswerDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Answer.objects.all()
     serializer_class = AnswerSerializer
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.request.method in ('PUT', 'PATCH', 'DELETE'):
+            return [IsAuthenticated(), IsVerified()]
+        return [IsAuthenticatedOrReadOnly()]
 
     def get_object(self):
         answer_id = self.kwargs['pk']
@@ -63,7 +73,7 @@ class AnswerDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 class AnswerLikeView(generics.CreateAPIView):
     serializer_class = AnswerLikeSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def perform_create(self, serializer):
         answer_id = self.kwargs['pk']
@@ -76,7 +86,7 @@ class AnswerLikeView(generics.CreateAPIView):
 
 
 class AnswerUnlikeView(generics.DestroyAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def get_object(self):
         answer_id = self.kwargs['pk']
@@ -97,7 +107,7 @@ class AnswerUnlikeView(generics.DestroyAPIView):
 
 class AnswerReportView(generics.CreateAPIView):
     serializer_class = AnswerReportSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def perform_create(self, serializer):
         answer_id = self.kwargs['pk']
@@ -106,7 +116,7 @@ class AnswerReportView(generics.CreateAPIView):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsVerified])
 def mark_as_best_answer(request, pk):
     try:
         answer = Answer.objects.get(pk=pk)

@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
+from core.permissions import IsVerified
 from .models import Notification, NotificationSetting
 from .serializers import NotificationSerializer, NotificationSettingSerializer
 
@@ -19,7 +20,7 @@ class NotificationListView(generics.ListAPIView):
 
 class NotificationDetailView(generics.RetrieveUpdateAPIView):
     serializer_class = NotificationSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def get_queryset(self):
         return Notification.objects.filter(recipient=self.request.user)
@@ -33,7 +34,7 @@ class NotificationDetailView(generics.RetrieveUpdateAPIView):
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsVerified])
 def mark_all_as_read(request):
     Notification.objects.filter(recipient=request.user, is_read=False).update(is_read=True)
     return Response({'message': 'All notifications marked as read'}, status=status.HTTP_200_OK)
@@ -41,7 +42,7 @@ def mark_all_as_read(request):
 
 class NotificationSettingView(generics.RetrieveUpdateAPIView):
     serializer_class = NotificationSettingSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def get_object(self):
         setting, created = NotificationSetting.objects.get_or_create(user=self.request.user)

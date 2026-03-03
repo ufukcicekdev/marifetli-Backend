@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.contrib.auth import get_user_model
+from core.permissions import IsVerified
 from .models import Question, QuestionLike, QuestionView, QuestionReport, Tag
 from .serializers import QuestionListSerializer, QuestionDetailSerializer, QuestionCreateSerializer, QuestionLikeSerializer, QuestionReportSerializer, TagSerializer
 from answers.serializers import AnswerSerializer
@@ -14,6 +15,11 @@ User = get_user_model()
 
 class QuestionListView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticatedOrReadOnly]
+
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return [IsAuthenticated(), IsVerified()]
+        return [IsAuthenticatedOrReadOnly()]
     queryset = Question.objects.all()
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['author', 'status', 'tags', 'category']
@@ -37,8 +43,12 @@ class QuestionListView(generics.ListCreateAPIView):
 
 
 class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
-    permission_classes = [IsAuthenticatedOrReadOnly]
     queryset = Question.objects.all()
+
+    def get_permissions(self):
+        if self.request.method in ('PUT', 'PATCH', 'DELETE'):
+            return [IsAuthenticated(), IsVerified()]
+        return [IsAuthenticatedOrReadOnly()]
     serializer_class = QuestionDetailSerializer
     lookup_field = 'slug'
 
@@ -62,7 +72,7 @@ class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 class QuestionLikeView(generics.CreateAPIView):
     serializer_class = QuestionLikeSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def perform_create(self, serializer):
         question_id = self.kwargs['pk']
@@ -75,7 +85,7 @@ class QuestionLikeView(generics.CreateAPIView):
 
 
 class QuestionUnlikeView(generics.DestroyAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def get_object(self):
         question_id = self.kwargs['pk']
@@ -106,7 +116,7 @@ class QuestionAnswersView(generics.ListAPIView):
 
 class QuestionReportView(generics.CreateAPIView):
     serializer_class = QuestionReportSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def perform_create(self, serializer):
         question_id = self.kwargs['pk']

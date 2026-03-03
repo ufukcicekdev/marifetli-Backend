@@ -2,12 +2,16 @@ from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from django.contrib.auth import get_user_model
+from django.utils import timezone
+from datetime import timedelta
+from core.permissions import IsVerified
 from .models import UserProfile, Follow, UserNotificationPreference
 from .serializers import UserSerializer, UserProfileSerializer, FollowSerializer, UserNotificationPreferenceSerializer
+from emails.services import EmailService
+from users.utils import generate_verification_token
 
 User = get_user_model()
 
@@ -27,6 +31,20 @@ class RegisterView(generics.CreateAPIView):
 
         # Create notification preferences
         UserNotificationPreference.objects.create(user=user)
+
+        # Generate verification token and send email
+        token = generate_verification_token()
+        user.verification_token = token
+        user.save()
+        
+        # Send verification email using EmailService
+        try:
+            EmailService.send_verification_email(user, token)
+        except Exception as e:
+            # Log error but don't fail registration
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to send verification email: {e}")
 
         refresh = RefreshToken.for_user(user)
 
@@ -74,7 +92,11 @@ def logout_view(request):
 
 class ProfileDetailView(generics.RetrieveUpdateAPIView):
     serializer_class = UserProfileSerializer
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.request.method in ('PUT', 'PATCH'):
+            return [IsAuthenticated(), IsVerified()]
+        return [IsAuthenticated()]
 
     def get_object(self):
         profile, created = UserProfile.objects.get_or_create(user=self.request.user)
@@ -83,7 +105,11 @@ class ProfileDetailView(generics.RetrieveUpdateAPIView):
 
 class UserDetailView(generics.RetrieveUpdateAPIView):
     serializer_class = UserSerializer
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.request.method in ('PUT', 'PATCH'):
+            return [IsAuthenticated(), IsVerified()]
+        return [IsAuthenticated()]
 
     def get_object(self):
         return self.request.user
@@ -136,7 +162,7 @@ class UserByUsernameView(generics.GenericAPIView):
 
 
 class ChangePasswordView(generics.UpdateAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
     serializer_class = UserSerializer
 
     def get_object(self):
@@ -157,7 +183,7 @@ class ChangePasswordView(generics.UpdateAPIView):
 
 class FollowUserView(generics.CreateAPIView):
     serializer_class = FollowSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def get_serializer(self, *args, **kwargs):
         data = dict(kwargs.get('data') or {})
@@ -169,7 +195,7 @@ class FollowUserView(generics.CreateAPIView):
 
 
 class UnfollowUserView(generics.DestroyAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def get_object(self):
         user_id = self.kwargs['user_id']
@@ -199,3 +225,121 @@ class UserFollowersListView(generics.ListAPIView):
         user = self.request.user
         follower_ids = Follow.objects.filter(following=user).values_list('follower_id', flat=True)
         return User.objects.filter(id__in=follower_ids)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def request_password_reset(request):
+    """Request password reset - sends email with reset token"""
+    email = request.data.get('email')
+    
+    if not email:
+        return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
+        # Don't reveal if email exists or not for security
+        return Response({'message': 'If the email exists, a password reset link has been sent.'}, status=status.HTTP_200_OK)
+    
+    # Generate reset token
+    token = generate_verification_token()
+    user.password_reset_token = token
+    user.password_reset_token_expiry = timezone.now() + timedelta(hours=1)
+    user.save()
+    
+    # Send password reset email
+    try:
+        EmailService.send_password_reset_email(user, token)
+        return Response({'message': 'If the email exists, a password reset link has been sent.'}, status=status.HTTP_200_OK)
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to send password reset email: {e}")
+        return Response({'error': 'Failed to send email. Please try again later.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def confirm_password_reset(request):
+    """Confirm password reset with token"""
+    token = request.data.get('token')
+    new_password = request.data.get('new_password')
+    
+    if not token or not new_password:
+        return Response({'error': 'Token and new password are required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        user = User.objects.get(
+            password_reset_token=token,
+            password_reset_token_expiry__gt=timezone.now()
+        )
+    except User.DoesNotExist:
+        return Response({'error': 'Invalid or expired token'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Set new password and clear tokens
+    user.set_password(new_password)
+    user.password_reset_token = None
+    user.password_reset_token_expiry = None
+    user.save()
+    
+    return Response({'message': 'Password has been reset successfully.'}, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def verify_email(request):
+    """Verify email address with token"""
+    token = request.data.get('token')
+    
+    if not token:
+        return Response({'error': 'Token is required'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        user = User.objects.get(verification_token=token)
+    except User.DoesNotExist:
+        return Response({'error': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    user.is_verified = True
+    user.email_verified_at = timezone.now()
+    user.verification_token = None
+    user.save()
+    
+    # Send welcome email
+    try:
+        EmailService.send_welcome_email(user)
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to send welcome email: {e}")
+    
+    return Response({'message': 'Email verified successfully!'}, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def resend_verification_email(request):
+    """Doğrulama mailini tekrar gönder (maili kaçıran kullanıcılar için)."""
+    user = request.user
+    if getattr(user, 'is_verified', False):
+        return Response(
+            {'message': 'E-posta adresiniz zaten doğrulanmış.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    token = generate_verification_token()
+    user.verification_token = token
+    user.save(update_fields=['verification_token'])
+    try:
+        EmailService.send_verification_email(user, token)
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Failed to resend verification email: {e}")
+        return Response(
+            {'error': 'E-posta gönderilemedi. Lütfen daha sonra tekrar deneyin.'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    return Response(
+        {'message': 'Doğrulama linki e-posta adresinize tekrar gönderildi. Gelen kutusu ve spam klasörünü kontrol edin.'},
+        status=status.HTTP_200_OK
+    )

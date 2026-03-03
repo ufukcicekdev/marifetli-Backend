@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Marifetli Bildirim</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .logo {
+            font-size: 28px;
+            font-weight: bold;
+            color: #f97316;
+            margin-bottom: 10px;
+        }
+        .notification-box {
+            background-color: #f8f9fa;
+            border-left: 4px solid #f97316;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .button {
+            display: inline-block;
+            background-color: #f97316;
+            color: #ffffff;
+            text-decoration: none;
+            padding: 12px 30px;
+            border-radius: 5px;
+            font-weight: bold;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .button:hover {
+            background-color: #ea580c;
+        }
+        .footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+            font-size: 12px;
+            color: #666;
+            text-align: center;
+        }
+        .notification-type {
+            display: inline-block;
+            background-color: #f97316;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo">🦉 Marifetli</div>
+            <h1>Bildirim</h1>
+        </div>
+        
+        <p>Merhaba {{ user.username }},</p>
+        
+        {% if notification_type %}
+        <span class="notification-type">{{ notification_type }}</span>
+        {% endif %}
+        
+        <div class="notification-box">
+            <p style="margin: 0; font-size: 16px;">{{ message }}</p>
+        </div>
+        
+        <p>Detaylar için Marifetli'yi ziyaret edebilirsiniz.</p>
+        
+        <div style="text-align: center;">
+            <a href="{{ frontend_url | default:'https://marifetli.com' }}" class="button">Marifetli'ye Git</a>
+        </div>
+        
+        <p>Sorularınız için bizimle iletişime geçebilirsiniz.</p>
+        
+        <p>Sevgiler,<br>Marifetli Ekibi</p>
+        
+        <div class="footer">
+            <p>Bu email bir bildirim için gönderilmiştir.</p>
+            <p>&copy; 2026 Marifetli. Tüm hakları saklıdır.</p>
+        </div>
+    </div>
+</body>
+</html>

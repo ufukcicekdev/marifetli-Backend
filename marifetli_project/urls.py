@@ -30,6 +30,7 @@ urlpatterns = [
     path('api/onboarding/', include('onboarding.urls')),
     path('api/achievements/', include('achievements.urls')),
     path('api/favorites/', include('favorites.urls')),
+    path('api/emails/', include('emails.urls')),
     path('api-auth/', include('rest_framework.urls')),
 ]
 

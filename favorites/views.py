@@ -2,6 +2,7 @@ from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.contrib.contenttypes.models import ContentType
+from core.permissions import IsVerified
 from .models import SavedCollection, SavedItem
 from .serializers import SavedCollectionSerializer, SavedItemSerializer
 from questions.models import Question
@@ -20,7 +21,7 @@ def get_or_create_default_collection(user):
 
 
 class SavedCollectionListCreateView(generics.ListCreateAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
     serializer_class = SavedCollectionSerializer
 
     def get_queryset(self):
@@ -31,7 +32,7 @@ class SavedCollectionListCreateView(generics.ListCreateAPIView):
 
 
 class SavedCollectionDetailView(generics.RetrieveUpdateDestroyAPIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
     serializer_class = SavedCollectionSerializer
 
     def get_queryset(self):
@@ -40,7 +41,7 @@ class SavedCollectionDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 class SavedCollectionItemsView(generics.ListAPIView):
     """List saved items in a collection"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
     serializer_class = SavedItemSerializer
 
     def get_queryset(self):
@@ -52,7 +53,7 @@ class SavedCollectionItemsView(generics.ListAPIView):
 
 class SaveToCollectionView(generics.CreateAPIView):
     """Save a question to a collection (or create default and save)"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def post(self, request, question_id, *args, **kwargs):
         try:
@@ -93,7 +94,7 @@ class SaveToCollectionView(generics.CreateAPIView):
 
 class CheckSavedView(generics.GenericAPIView):
     """Check if a question is saved by current user"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def get(self, request, question_id, *args, **kwargs):
         ct = ContentType.objects.get_for_model(Question)
@@ -111,7 +112,7 @@ class CheckSavedView(generics.GenericAPIView):
 
 class RemoveFromSavedView(generics.DestroyAPIView):
     """Remove a question from a collection"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def delete(self, request, question_id, *args, **kwargs):
         from django.shortcuts import get_object_or_404
@@ -129,7 +130,7 @@ class RemoveFromSavedView(generics.DestroyAPIView):
 
 class CreateCollectionAndSaveView(generics.CreateAPIView):
     """Create a new collection and save the question to it"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def post(self, request, question_id, *args, **kwargs):
         try:

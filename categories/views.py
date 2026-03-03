@@ -1,6 +1,7 @@
 from rest_framework import generics
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from core.permissions import IsVerified
 from .models import Category, CategoryFollow
 from .serializers import CategorySerializer, CategoryListSerializer
 
@@ -22,7 +23,7 @@ from rest_framework.views import APIView
 
 
 class CategoryFollowView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def post(self, request, pk):
         category = Category.objects.get(pk=pk)
@@ -31,7 +32,7 @@ class CategoryFollowView(APIView):
 
 
 class CategoryUnfollowView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def delete(self, request, pk):
         CategoryFollow.objects.filter(user=request.user, category_id=pk).delete()

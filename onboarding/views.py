@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.utils import timezone
+from core.permissions import IsVerified
 from .models import OnboardingStep, OnboardingChoice, UserOnboarding, UserOnboardingSelection
 from .serializers import OnboardingStepSerializer
 from questions.serializers import TagSerializer
@@ -21,7 +22,7 @@ class OnboardingStepListView(generics.ListAPIView):
 
 class OnboardingSubmitView(APIView):
     """Bir adım için kullanıcı seçimlerini kaydet"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def post(self, request):
         step_id = request.data.get('step_id')
@@ -80,7 +81,7 @@ class OnboardingSubmitView(APIView):
 
 class OnboardingCompleteView(APIView):
     """Onboarding'i tamamla"""
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerified]
 
     def post(self, request):
         obj, _ = UserOnboarding.objects.get_or_create(user=request.user)
