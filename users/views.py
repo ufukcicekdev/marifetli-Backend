@@ -5,6 +5,8 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from django.contrib.auth import get_user_model
+from django.db.models import F
+from django.db.models.functions import Greatest
 from django.utils import timezone
 from datetime import timedelta
 from core.permissions import IsVerified
@@ -136,6 +138,13 @@ class UserByUsernameView(generics.GenericAPIView):
         if request.user.is_authenticated and request.user != user:
             is_following = Follow.objects.filter(follower=request.user, following=user).exists()
 
+        # Kendi profili için sayıları Follow tablosundan hesapla (denormalize alan güncel olmasa bile doğru görünsün)
+        followers_count = user.followers_count
+        following_count = user.following_count
+        if request.user.is_authenticated and request.user.pk == user.pk:
+            followers_count = Follow.objects.filter(following=user).count()
+            following_count = Follow.objects.filter(follower=user).count()
+
         data = {
             'id': user.id,
             'username': user.username,
@@ -146,8 +155,8 @@ class UserByUsernameView(generics.GenericAPIView):
             'bio': user.bio or (profile.bio if profile else ''),
             'profile_picture': pic_url(user.profile_picture),
             'cover_image': pic_url(user.cover_image),
-            'followers_count': user.followers_count,
-            'following_count': user.following_count,
+            'followers_count': followers_count,
+            'following_count': following_count,
             'reputation': profile.reputation if profile else 0,
             'location': profile.location if profile else '',
             'website': profile.website if profile else '',
@@ -187,11 +196,15 @@ class FollowUserView(generics.CreateAPIView):
 
     def get_serializer(self, *args, **kwargs):
         data = dict(kwargs.get('data') or {})
+        data['follower'] = self.request.user.pk
         data['following'] = self.kwargs['user_id']
         return super().get_serializer(*args, **{**kwargs, 'data': data})
 
     def perform_create(self, serializer):
-        serializer.save(follower=self.request.user)
+        follow = serializer.save(follower=self.request.user)
+        # Güncel takip sayılarını artır
+        User.objects.filter(pk=follow.follower_id).update(following_count=F('following_count') + 1)
+        User.objects.filter(pk=follow.following_id).update(followers_count=F('followers_count') + 1)
 
 
 class UnfollowUserView(generics.DestroyAPIView):
@@ -203,7 +216,12 @@ class UnfollowUserView(generics.DestroyAPIView):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
+        follower_id = instance.follower_id
+        following_id = instance.following_id
         self.perform_destroy(instance)
+        # Takip sayılarını azalt
+        User.objects.filter(pk=follower_id).update(following_count=Greatest(0, F('following_count') - 1))
+        User.objects.filter(pk=following_id).update(followers_count=Greatest(0, F('followers_count') - 1))
         return Response({'message': 'Unfollowed successfully'}, status=status.HTTP_204_NO_CONTENT)
 
 
