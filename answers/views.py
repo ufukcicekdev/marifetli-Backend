@@ -40,6 +40,23 @@ class AnswerListView(generics.ListCreateAPIView):
         q.save(update_fields=['answer_count'])
 
 
+class UserAnswersListView(generics.ListAPIView):
+    """
+    Belirli bir kullanıcının tüm cevaplarını (yorumlarını) listeler.
+    Profil sayfasındaki 'Yorumlar' sekmesi için kullanılır.
+    """
+    serializer_class = AnswerSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        user_id = self.kwargs['user_id']
+        return (
+            Answer.objects
+            .filter(author_id=user_id, is_deleted=False)
+            .select_related('author', 'question')
+        )
+
+
 class AnswerDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Answer.objects.all()
     serializer_class = AnswerSerializer
