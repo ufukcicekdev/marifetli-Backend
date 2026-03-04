@@ -9,14 +9,16 @@ from django.contrib.contenttypes.models import ContentType
 User = get_user_model()
 
 
-# Configurable reputation points (can be moved to settings)
+# İtibar kuralları (profilde gösterilen puan nasıl artar/azalır)
+# Artış: soru paylaşma +5, cevap yazma +10, cevabın en iyi seçilmesi +25, gönderi/cevaba beğeni almak +2
+# Azalış: spam cezası -20 (ileride rapor onaylanınca uygulanabilir), downvote -1 (ileride eklenebilir)
 REPUTATION_RULES = {
-    'question_posted': 5,
-    'answer_posted': 10,
-    'best_answer_selected': 25,
-    'like_received': 2,
-    'spam_penalty': -20,
-    'downvote_received': -1,
+    'question_posted': 5,       # Soru paylaştı
+    'answer_posted': 10,        # Cevap yazdı
+    'best_answer_selected': 25,  # Cevabı en iyi seçildi
+    'like_received': 2,         # Gönderi veya cevabı beğenildi
+    'spam_penalty': -20,        # Spam cezası (rapor onayı vb.)
+    'downvote_received': -1,     # Olumsuz oy (ileride)
 }
 
 

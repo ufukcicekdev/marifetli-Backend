@@ -2,7 +2,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
-from .models import AchievementCategory, UserAchievement
+from .models import AchievementCategory, UserAchievement, UserStreak
 
 User = get_user_model()
 
@@ -14,17 +14,47 @@ def _get_user_from_username(username: str):
         return None
 
 
+def _get_progress_for_achievement(user, a):
+    """Başarı için mevcut ilerleme ve hedef döner (varsa)."""
+    target = getattr(a, 'target_count', None)
+    if target is None:
+        return None, None
+    current = None
+    if a.code.startswith('streak_'):
+        try:
+            streak = UserStreak.objects.get(user=user)
+            current = streak.current_streak_days
+        except UserStreak.DoesNotExist:
+            current = 0
+        return current, target
+    # Soru/cevap sayısı başarıları (Keşif + Uzman)
+    if a.code == 'sharing_enthusiast':
+        from questions.models import Question
+        current = Question.objects.filter(author=user, status='open').count()
+        return min(current, 5), 5
+    if a.code in ('question_expert_10', 'question_expert_25', 'question_expert_50'):
+        from questions.models import Question
+        current = Question.objects.filter(author=user, status='open').count()
+        return min(current, target), target
+    if a.code in ('answer_expert_10', 'answer_expert_25', 'answer_expert_50'):
+        from answers.models import Answer
+        current = Answer.objects.filter(author=user).count()
+        return min(current, target), target
+    return current, target
+
+
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def user_achievements_by_username(request, username):
-    """Belirli kullanıcının başarılarını kategorilere göre döner"""
+    """Belirli kullanıcının başarılarını kategorilere göre döner; ilerleme bilgisi dahil."""
     user = _get_user_from_username(username)
     if not user:
         return Response({'detail': 'Kullanıcı bulunamadı'}, status=404)
 
-    unlocked_ids = set(
-        UserAchievement.objects.filter(user=user).values_list('achievement_id', flat=True)
+    unlocked_map = dict(
+        UserAchievement.objects.filter(user=user).values_list('achievement_id', 'unlocked_at')
     )
+    unlocked_ids = set(unlocked_map.keys())
 
     categories = AchievementCategory.objects.filter(is_active=True).prefetch_related(
         'achievements'
@@ -34,6 +64,22 @@ def user_achievements_by_username(request, username):
     for cat in categories:
         achievements = list(cat.achievements.filter(is_active=True).order_by('order'))
         unlocked = [a for a in achievements if a.id in unlocked_ids]
+        achievements_data = []
+        for a in achievements:
+            current_progress, target_progress = _get_progress_for_achievement(user, a)
+            ua_at = unlocked_map.get(a.id)
+            achievements_data.append({
+                'id': a.id,
+                'name': a.name,
+                'description': a.description,
+                'code': a.code,
+                'icon': a.icon,
+                'order': a.order,
+                'unlocked': a.id in unlocked_map,
+                'unlocked_at': ua_at.isoformat() if ua_at else None,
+                'current_progress': current_progress,
+                'target_progress': target_progress,
+            })
         result.append({
             'id': cat.id,
             'name': cat.name,
@@ -42,22 +88,7 @@ def user_achievements_by_username(request, username):
             'order': cat.order,
             'total_count': len(achievements),
             'unlocked_count': len(unlocked),
-            'achievements': [
-                {
-                    'id': a.id,
-                    'name': a.name,
-                    'description': a.description,
-                    'code': a.code,
-                    'icon': a.icon,
-                    'order': a.order,
-                    'unlocked': a.id in unlocked_ids,
-                    'unlocked_at': (
-                        UserAchievement.objects.get(user=user, achievement=a).unlocked_at.isoformat()
-                        if a.id in unlocked_ids else None
-                    ),
-                }
-                for a in achievements
-            ],
+            'achievements': achievements_data,
         })
 
     return Response(result)

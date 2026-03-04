@@ -30,6 +30,7 @@ class Achievement(models.Model):
     icon = models.CharField(max_length=100, blank=True)
     order = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
+    target_count = models.PositiveIntegerField(null=True, blank=True, help_text='İlerleme başarıları için hedef sayı (örn. 10 yorum)')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -50,3 +51,18 @@ class UserAchievement(models.Model):
 
     def __str__(self):
         return f"{self.user.username} - {self.achievement.name}"
+
+
+class UserStreak(models.Model):
+    """Kullanıcının günlük aktivite serisi (yorum, beğeni, gönderi = 1 gün sayılır)."""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='streak')
+    last_activity_date = models.DateField(null=True, blank=True)
+    current_streak_days = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Kullanıcı serisi'
+        verbose_name_plural = 'Kullanıcı serileri'
+
+    def __str__(self):
+        return f"{self.user.username}: {self.current_streak_days} gün"

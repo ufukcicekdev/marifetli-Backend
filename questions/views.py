@@ -82,6 +82,12 @@ class QuestionLikeView(generics.CreateAPIView):
         # Increment like count
         question.like_count += 1
         question.save(update_fields=['like_count'])
+        # Seri (streak) güncelle: beğeni aktivite sayılır
+        from achievements.services import record_activity_and_check_streak
+        record_activity_and_check_streak(self.request.user)
+        # Soru sahibine itibar: beğeni alan içerik
+        from reputation.services import award_reputation
+        award_reputation(question.author, 'like_received', content_object=question, description='Soruna beğeni geldi')
 
 
 class QuestionUnlikeView(generics.DestroyAPIView):

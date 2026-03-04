@@ -27,6 +27,9 @@ def on_question_created(sender, instance, created, **kwargs):
         services.check_and_award_on_first_question(user)
         count = Question.objects.filter(author=user, status='open').count()
         services.check_and_award_on_question_count(user, count)
+        services.record_activity_and_check_streak(user)
+        from reputation.services import award_reputation
+        award_reputation(user, 'question_posted', content_object=instance, description='Soru paylaştın')
 
 
 @receiver(post_save, sender=Answer)
@@ -35,6 +38,9 @@ def on_answer_created(sender, instance, created, **kwargs):
         user = instance.author
         count = Answer.objects.filter(author=user).count()
         services.check_and_award_on_answer_count(user, count)
+        services.record_activity_and_check_streak(user)
+        from reputation.services import award_reputation
+        award_reputation(user, 'answer_posted', content_object=instance, description='Cevap yazdın')
 
 
 def connect_signals():

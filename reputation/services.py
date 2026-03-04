@@ -31,6 +31,9 @@ def award_reputation(user: User, reason: str, points: int = None, content_object
     )
 
     check_and_award_badges(user)
+    # Başarılar (achievements) itibar eşiklerini kontrol et (100, 1000 vb.)
+    from achievements.services import check_and_award_on_reputation
+    check_and_award_on_reputation(user, profile.reputation)
 
 
 def check_and_award_badges(user: User):

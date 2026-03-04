@@ -100,6 +100,12 @@ class AnswerLikeView(generics.CreateAPIView):
         # Increment like count
         answer.like_count += 1
         answer.save(update_fields=['like_count'])
+        # Seri (streak) güncelle: beğeni aktivite sayılır
+        from achievements.services import record_activity_and_check_streak
+        record_activity_and_check_streak(self.request.user)
+        # Cevap sahibine itibar: beğeni alan içerik
+        from reputation.services import award_reputation
+        award_reputation(answer.author, 'like_received', content_object=answer, description='Cevabına beğeni geldi')
 
 
 class AnswerUnlikeView(generics.DestroyAPIView):
@@ -143,7 +149,9 @@ def mark_as_best_answer(request, pk):
         if question.author != request.user:
             return Response({'error': 'Only the question author can select the best answer'}, status=status.HTTP_403_FORBIDDEN)
         
-        # Mark as best answer
+        # Önce bu sorunun diğer cevaplarındaki en-iyi işaretini kaldır
+        Answer.objects.filter(question=question).exclude(pk=answer.pk).update(is_best_answer=False)
+        # Bu cevabı en iyi yap
         answer.is_best_answer = True
         answer.save(update_fields=['is_best_answer'])
         
@@ -159,6 +167,9 @@ def mark_as_best_answer(request, pk):
         # Award best answer achievement to answer author
         from achievements.services import check_and_award_on_best_answer
         check_and_award_on_best_answer(answer.author)
+        # İtibar: en iyi cevap seçildi
+        from reputation.services import award_reputation
+        award_reputation(answer.author, 'best_answer_selected', content_object=answer, description='Cevabın en iyi seçildi')
 
         return Response({'message': 'Answer marked as best answer'}, status=status.HTTP_200_OK)
     except Answer.DoesNotExist:

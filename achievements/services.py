@@ -2,10 +2,13 @@
 Başarı kontrol ve ödül servisi.
 Her eylem türü için ilgili başarıları kontrol eder.
 """
+from datetime import date, timedelta
 from django.contrib.auth import get_user_model
-from .models import Achievement, UserAchievement
+from .models import Achievement, UserAchievement, UserStreak
 
 User = get_user_model()
+
+STREAK_ACHIEVEMENT_DAYS = [5, 10, 20, 30, 50, 100]
 
 
 def award_achievement(user: User, code: str) -> bool:
@@ -43,9 +46,13 @@ def check_and_award_on_first_question(user: User) -> None:
 
 
 def check_and_award_on_question_count(user: User, count: int) -> None:
-    """Soru sayısına göre başarılar"""
+    """Soru sayısına göre başarılar (Keşif + Uzman serisi)"""
     if count >= 100:
         award_achievement(user, 'question_master_100')
+    elif count >= 50:
+        award_achievement(user, 'question_expert_50')
+    elif count >= 25:
+        award_achievement(user, 'question_expert_25')
     elif count >= 10:
         award_achievement(user, 'question_expert_10')
     elif count >= 5:
@@ -53,9 +60,13 @@ def check_and_award_on_question_count(user: User, count: int) -> None:
 
 
 def check_and_award_on_answer_count(user: User, count: int) -> None:
-    """Cevap sayısına göre başarılar"""
+    """Cevap sayısına göre başarılar (Keşif + Uzman serisi)"""
     if count >= 100:
         award_achievement(user, 'answer_master_100')
+    elif count >= 50:
+        award_achievement(user, 'answer_expert_50')
+    elif count >= 25:
+        award_achievement(user, 'answer_expert_25')
     elif count >= 10:
         award_achievement(user, 'answer_expert_10')
 
@@ -77,3 +88,29 @@ def check_and_award_on_followers(user: User, followers_count: int) -> None:
     """Takipçi sayısına göre"""
     if followers_count >= 10:
         award_achievement(user, 'popular_10')
+
+
+def record_activity_and_check_streak(user: User) -> None:
+    """
+    Kullanıcının bugün bir aktivite yaptığını kaydeder (yorum, beğeni, gönderi).
+    Seriyi günceller ve Marifetli Serisi başarılarını kontrol eder.
+    """
+    if not user or not user.pk:
+        return
+    today = date.today()
+    streak, _ = UserStreak.objects.get_or_create(user=user, defaults={'current_streak_days': 0})
+    last = streak.last_activity_date
+    if last == today:
+        return
+    if last is None:
+        streak.current_streak_days = 1
+    elif last == today - timedelta(days=1):
+        streak.current_streak_days += 1
+    else:
+        streak.current_streak_days = 1
+    streak.last_activity_date = today
+    streak.save(update_fields=['last_activity_date', 'current_streak_days', 'updated_at'])
+    for days in STREAK_ACHIEVEMENT_DAYS:
+        if streak.current_streak_days >= days:
+            code = f'streak_{days}'
+            award_achievement(user, code)
