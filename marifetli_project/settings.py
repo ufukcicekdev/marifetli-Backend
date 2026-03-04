@@ -297,17 +297,23 @@ AUTHENTICATION_BACKENDS = [
     "django.contrib.auth.backends.ModelBackend",
 ]
 
-# Google OAuth Settings
-SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = "YOUR_GOOGLE_CLIENT_ID"
-SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = "YOUR_GOOGLE_CLIENT_SECRET"
+# Google OAuth - .env'den oku (Google Cloud Console'dan Client ID ve Secret al)
+SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = config("SOCIAL_AUTH_GOOGLE_OAUTH2_KEY", default="")
+SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = config("SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET", default="")
+
+# OAuth sonrası JWT üretip frontend'e yönlendirilecek URL (backend view)
+LOGIN_REDIRECT_URL = "/api/auth/oauth-success/"
+# OAuth başarısız olursa (frontend'e hata ile yönlendir)
+LOGIN_ERROR_URL = "/api/auth/oauth-error/"
 
 SOCIAL_AUTH_PIPELINE = (
     "social_core.pipeline.social_auth.social_details",
     "social_core.pipeline.social_auth.social_uid",
     "social_core.pipeline.social_auth.auth_allowed",
     "social_core.pipeline.social_auth.social_user",
+    "users.pipeline.get_username_from_email",
     "social_core.pipeline.user.get_username",
-    "social_core.pipeline.user.create_user",
+    "users.pipeline.create_user_with_email",
     "social_core.pipeline.social_auth.associate_user",
     "social_core.pipeline.social_auth.load_extra_data",
     "social_core.pipeline.user.user_details",
@@ -325,3 +331,25 @@ FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 
 # Firebase Cloud Messaging (push bildirimleri) - .env'e FIREBASE_CREDENTIALS_PATH=path/to/serviceAccountKey.json ekle
 FIREBASE_CREDENTIALS_PATH = config("FIREBASE_CREDENTIALS_PATH", default="")
+
+# Cache - yük azaltma ve ölçeklenebilirlik (Redis önerilir)
+# .env: REDIS_URL=redis://127.0.0.1:6379/0 (veya Railway/Upstash Redis URL)
+REDIS_URL = config("REDIS_URL", default="")
+if REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "marifetli-default",
+        }
+    }
+
+# Cache TTL (saniye): soru listesi vb. liste sayfaları
+CACHE_TTL_QUESTION_LIST = config("CACHE_TTL_QUESTION_LIST", default=60, cast=int)  # 1 dakika
+CACHE_TTL_QUESTION_DETAIL = config("CACHE_TTL_QUESTION_DETAIL", default=30, cast=int)  # 30 sn

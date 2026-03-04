@@ -8,6 +8,9 @@ from django.contrib.auth import get_user_model
 from django.db.models import F
 from django.db.models.functions import Greatest
 from django.utils import timezone
+from django.shortcuts import redirect
+from django.conf import settings
+from urllib.parse import urlencode
 from datetime import timedelta
 from core.permissions import IsVerified
 from .models import UserProfile, Follow, UserNotificationPreference
@@ -78,6 +81,34 @@ class LoginView(generics.GenericAPIView):
                 return Response({'error': 'Invalid credentials'}, status=status.HTTP_401_UNAUTHORIZED)
         else:
             return Response({'error': 'Email and password required'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def oauth_success(request):
+    """
+    Google OAuth tamamlandıktan sonra social_django buraya yönlendirir.
+    Session'daki kullanıcıya JWT üretir ve frontend /auth/callback sayfasına token'larla yönlendirir.
+    """
+    if not request.user.is_authenticated:
+        frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000")
+        return redirect(f"{frontend_url}/auth/callback?error=not_authenticated")
+    user = request.user
+    refresh = RefreshToken.for_user(user)
+    access = str(refresh.access_token)
+    refresh_str = str(refresh)
+    frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000").rstrip("/")
+    params = urlencode({"access": access, "refresh": refresh_str})
+    return redirect(f"{frontend_url}/auth/callback?{params}")
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def oauth_error(request):
+    """OAuth hata sayfası - frontend'e error ile yönlendir."""
+    frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000").rstrip("/")
+    error = request.GET.get("error", "oauth_failed")
+    return redirect(f"{frontend_url}/auth/callback?error={error}")
 
 
 @api_view(['POST'])

@@ -4,8 +4,11 @@ from rest_framework.permissions import IsAuthenticated, AllowAny, IsAuthenticate
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
+from django.conf import settings
+from django.core.cache import cache
 from django.contrib.auth import get_user_model
 from core.permissions import IsVerified
+from core.cache_utils import get_question_list_cache_key, invalidate_question_list
 from .models import Question, QuestionLike, QuestionView, QuestionReport, Tag
 from .serializers import QuestionListSerializer, QuestionDetailSerializer, QuestionCreateSerializer, QuestionLikeSerializer, QuestionReportSerializer, TagSerializer
 from answers.serializers import AnswerSerializer
@@ -25,10 +28,15 @@ class QuestionListView(generics.ListCreateAPIView):
     filterset_fields = ['author', 'status', 'tags', 'category']
 
     def get_queryset(self):
-        qs = Question.objects.all()
+        qs = (
+            Question.objects.all()
+            .select_related('author', 'category')
+            .prefetch_related('tags')
+        )
         if self.request.user.is_authenticated and self.request.query_params.get('author') == str(self.request.user.id):
             return qs.filter(author=self.request.user)
         return qs.exclude(status='draft')
+
     search_fields = ['title', 'description', 'content']
     ordering_fields = ['created_at', 'updated_at', 'like_count', 'answer_count', 'view_count', 'hot_score']
     ordering = ['-hot_score', '-created_at']
@@ -38,12 +46,26 @@ class QuestionListView(generics.ListCreateAPIView):
             return QuestionCreateSerializer
         return QuestionListSerializer
 
+    def list(self, request, *args, **kwargs):
+        if request.method != 'GET':
+            return super().list(request, *args, **kwargs)
+        key = get_question_list_cache_key(request)
+        ttl = getattr(settings, 'CACHE_TTL_QUESTION_LIST', 60)
+        data = cache.get(key)
+        if data is not None:
+            return Response(data)
+        response = super().list(request, *args, **kwargs)
+        if response.status_code == 200:
+            cache.set(key, response.data, timeout=ttl)
+        return response
+
     def perform_create(self, serializer):
         serializer.save(author=self.request.user)
+        invalidate_question_list()
 
 
 class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Question.objects.all()
+    queryset = Question.objects.select_related('author', 'category').prefetch_related('tags')
 
     def get_permissions(self):
         if self.request.method in ('PUT', 'PATCH', 'DELETE'):
@@ -68,6 +90,14 @@ class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
         
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+
+    def perform_update(self, serializer):
+        serializer.save()
+        invalidate_question_list()
+
+    def perform_destroy(self, instance):
+        instance.delete()
+        invalidate_question_list()
 
 
 class QuestionLikeView(generics.CreateAPIView):
