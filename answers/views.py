@@ -92,6 +92,15 @@ class AnswerLikeView(generics.CreateAPIView):
     serializer_class = AnswerLikeSerializer
     permission_classes = [IsAuthenticated, IsVerified]
 
+    def create(self, request, *args, **kwargs):
+        answer_id = self.kwargs['pk']
+        if AnswerLike.objects.filter(user=request.user, answer_id=answer_id).exists():
+            return Response(
+                {'detail': 'Bu yorumu zaten beğendin.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         answer_id = self.kwargs['pk']
         answer = Answer.objects.get(pk=answer_id)
@@ -106,6 +115,17 @@ class AnswerLikeView(generics.CreateAPIView):
         # Cevap sahibine itibar: beğeni alan içerik
         from reputation.services import award_reputation
         award_reputation(answer.author, 'like_received', content_object=answer, description='Cevabına beğeni geldi')
+        # Cevap sahibine bildirim (kendisi beğenmediyse)
+        if answer.author_id != self.request.user.pk:
+            from notifications.services import create_notification
+            create_notification(
+                answer.author,
+                self.request.user,
+                'like_answer',
+                f"{self.request.user.username} yorumunu beğendi",
+                question=answer.question,
+                answer=answer,
+            )
 
 
 class AnswerUnlikeView(generics.DestroyAPIView):
@@ -170,6 +190,16 @@ def mark_as_best_answer(request, pk):
         # İtibar: en iyi cevap seçildi
         from reputation.services import award_reputation
         award_reputation(answer.author, 'best_answer_selected', content_object=answer, description='Cevabın en iyi seçildi')
+        # Cevap sahibine bildirim
+        from notifications.services import create_notification
+        create_notification(
+            answer.author,
+            request.user,
+            'best_answer',
+            f"{request.user.username} cevabını en iyi cevap olarak işaretledi",
+            question=question,
+            answer=answer,
+        )
 
         return Response({'message': 'Answer marked as best answer'}, status=status.HTTP_200_OK)
     except Answer.DoesNotExist:

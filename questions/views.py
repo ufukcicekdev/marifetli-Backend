@@ -74,6 +74,15 @@ class QuestionLikeView(generics.CreateAPIView):
     serializer_class = QuestionLikeSerializer
     permission_classes = [IsAuthenticated, IsVerified]
 
+    def create(self, request, *args, **kwargs):
+        question_id = self.kwargs['pk']
+        if QuestionLike.objects.filter(user=request.user, question_id=question_id).exists():
+            return Response(
+                {'detail': 'Bu gönderiyi zaten beğendin.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         question_id = self.kwargs['pk']
         question = Question.objects.get(pk=question_id)
@@ -88,6 +97,16 @@ class QuestionLikeView(generics.CreateAPIView):
         # Soru sahibine itibar: beğeni alan içerik
         from reputation.services import award_reputation
         award_reputation(question.author, 'like_received', content_object=question, description='Soruna beğeni geldi')
+        # Soru sahibine bildirim (kendisi beğenmediyse)
+        if question.author_id != self.request.user.pk:
+            from notifications.services import create_notification
+            create_notification(
+                question.author,
+                self.request.user,
+                'like_question',
+                f"{self.request.user.username} gönderini beğendi",
+                question=question,
+            )
 
 
 class QuestionUnlikeView(generics.DestroyAPIView):

@@ -4,10 +4,33 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 from core.permissions import IsVerified
-from .models import Notification, NotificationSetting
+from .models import Notification, NotificationSetting, FCMDeviceToken
 from .serializers import NotificationSerializer, NotificationSettingSerializer
 
 User = get_user_model()
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def unread_count(request):
+    """Bildirim çanı rozeti için okunmamış sayı."""
+    count = Notification.objects.filter(recipient=request.user, is_read=False).count()
+    return Response({'unread_count': count})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsVerified])
+def register_fcm_token(request):
+    """Cihaz FCM token'ını kaydet (push bildirimleri için). Body: { token, device_name? }"""
+    token = (request.data.get('token') or '').strip()
+    if not token:
+        return Response({'error': 'token gerekli'}, status=status.HTTP_400_BAD_REQUEST)
+    device_name = (request.data.get('device_name') or '')[:100]
+    FCMDeviceToken.objects.update_or_create(
+        token=token,
+        defaults={'user': request.user, 'device_name': device_name},
+    )
+    return Response({'message': 'Token kaydedildi'}, status=status.HTTP_200_OK)
 
 
 class NotificationListView(generics.ListAPIView):
@@ -15,7 +38,11 @@ class NotificationListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Notification.objects.filter(recipient=self.request.user).order_by('-created_at')
+        return (
+            Notification.objects.filter(recipient=self.request.user)
+            .select_related('sender', 'question', 'answer')
+            .order_by('-created_at')
+        )
 
 
 class NotificationDetailView(generics.RetrieveUpdateAPIView):

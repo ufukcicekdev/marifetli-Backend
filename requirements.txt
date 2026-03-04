@@ -15,3 +15,5 @@ redis==5.2.0
 gunicorn==23.0.0
 whitenoise==6.8.2
 requests==2.32.5
+# Push bildirimleri için (FCM): pip install firebase-admin ve .env'e FIREBASE_CREDENTIALS_PATH ekle
+firebase-admin>=6.0.0

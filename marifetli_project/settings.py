@@ -322,3 +322,6 @@ SMTP2GO_FROM_EMAIL = config("SMTP2GO_FROM_EMAIL", default="noreply@marifetli.com
 
 # Frontend URL for email links
 FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
+
+# Firebase Cloud Messaging (push bildirimleri) - .env'e FIREBASE_CREDENTIALS_PATH=path/to/serviceAccountKey.json ekle
+FIREBASE_CREDENTIALS_PATH = config("FIREBASE_CREDENTIALS_PATH", default="")

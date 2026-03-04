@@ -30,6 +30,22 @@ def on_question_created(sender, instance, created, **kwargs):
         services.record_activity_and_check_streak(user)
         from reputation.services import award_reputation
         award_reputation(user, 'question_posted', content_object=instance, description='Soru paylaştın')
+        # Takip edenlere bildirim: "X yeni gönderi paylaştı"
+        from users.models import Follow
+        from notifications.services import create_notification
+        follower_ids = Follow.objects.filter(following=user).values_list('follower_id', flat=True)
+        from users.models import User as U
+        for fid in follower_ids:
+            if fid != user.pk:
+                try:
+                    recipient = U.objects.get(pk=fid)
+                    create_notification(
+                        recipient, user, 'followed_post',
+                        f"{user.username} yeni bir gönderi paylaştı: {instance.title[:50]}",
+                        question=instance,
+                    )
+                except Exception:
+                    pass
 
 
 @receiver(post_save, sender=Answer)
@@ -41,6 +57,17 @@ def on_answer_created(sender, instance, created, **kwargs):
         services.record_activity_and_check_streak(user)
         from reputation.services import award_reputation
         award_reputation(user, 'answer_posted', content_object=instance, description='Cevap yazdın')
+        # Soru sahibine bildirim (cevap kendi sorusuna değilse)
+        if instance.question.author_id != user.pk:
+            from notifications.services import create_notification
+            create_notification(
+                instance.question.author,
+                user,
+                'answer',
+                f"{user.username} soruna cevap yazdı",
+                question=instance.question,
+                answer=instance,
+            )
 
 
 def connect_signals():

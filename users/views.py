@@ -205,6 +205,14 @@ class FollowUserView(generics.CreateAPIView):
         # Güncel takip sayılarını artır
         User.objects.filter(pk=follow.follower_id).update(following_count=F('following_count') + 1)
         User.objects.filter(pk=follow.following_id).update(followers_count=F('followers_count') + 1)
+        # Takip edilen kullanıcıya bildirim
+        from notifications.services import create_notification
+        create_notification(
+            follow.following,
+            self.request.user,
+            'follow',
+            f"{self.request.user.username} seni takip etmeye başladı",
+        )
 
 
 class UnfollowUserView(generics.DestroyAPIView):
