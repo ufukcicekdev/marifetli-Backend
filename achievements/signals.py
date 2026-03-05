@@ -52,7 +52,8 @@ def on_question_created(sender, instance, created, **kwargs):
 def on_answer_created(sender, instance, created, **kwargs):
     if created:
         user = instance.author
-        count = Answer.objects.filter(author=user).count()
+        # Farklı sorulardaki cevap sayısı (aynı soruya birden fazla cevap tek sayılır)
+        count = Answer.objects.filter(author=user).values('question').distinct().count()
         services.check_and_award_on_answer_count(user, count)
         services.record_activity_and_check_streak(user)
         from reputation.services import award_reputation

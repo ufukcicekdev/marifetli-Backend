@@ -6,6 +6,9 @@ from .models import AchievementCategory, UserAchievement, UserStreak
 
 User = get_user_model()
 
+# Seri kademeleri sırayla: önce 5 gün, sonra 10, 20, ... (ilerleme sadece ilgili kademede gösterilir)
+STREAK_TIERS = [5, 10, 20, 30, 50, 100]
+
 
 def _get_user_from_username(username: str):
     try:
@@ -23,9 +26,17 @@ def _get_progress_for_achievement(user, a):
     if a.code.startswith('streak_'):
         try:
             streak = UserStreak.objects.get(user=user)
-            current = streak.current_streak_days
+            streak_days = streak.current_streak_days
         except UserStreak.DoesNotExist:
-            current = 0
+            streak_days = 0
+        # Sıralı ilerleme: sadece bu kademeye düşen gün sayısı (önceki kademe tamamlanmadan sonrakinde 0)
+        try:
+            days = int(a.code.replace('streak_', ''))
+            idx = STREAK_TIERS.index(days)
+            prev = STREAK_TIERS[idx - 1] if idx > 0 else 0
+            current = min(target, max(0, streak_days - prev))
+        except (ValueError, IndexError):
+            current = min(streak_days, target)
         return current, target
     # Soru/cevap sayısı başarıları (Keşif + Uzman)
     if a.code == 'sharing_enthusiast':
@@ -38,7 +49,8 @@ def _get_progress_for_achievement(user, a):
         return min(current, target), target
     if a.code in ('answer_expert_10', 'answer_expert_25', 'answer_expert_50'):
         from answers.models import Answer
-        current = Answer.objects.filter(author=user).count()
+        # Farklı sorulardaki cevap sayısı (aynı soruya birden fazla cevap tek sayılır)
+        current = Answer.objects.filter(author=user).values('question').distinct().count()
         return min(current, target), target
     return current, target
 
