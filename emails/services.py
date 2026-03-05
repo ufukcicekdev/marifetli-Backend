@@ -163,7 +163,7 @@ class EmailService:
         context = {
             'user': user,
             'username': user.username,
-            'frontend_url': getattr(settings, 'FRONTEND_URL', 'https://marifetli.com.tr'),
+            'frontend_url': getattr(settings, 'FRONTEND_URL', ''),
         }
         return EmailService.send_template_email(
             recipient=user.email,
@@ -178,7 +178,7 @@ class EmailService:
             'user': user,
             'message': message,
             'notification_type': notification_type,
-            'frontend_url': getattr(settings, 'FRONTEND_URL', 'https://marifetli.com.tr'),
+            'frontend_url': getattr(settings, 'FRONTEND_URL', ''),
         }
         return EmailService.send_template_email(
             recipient=user.email,

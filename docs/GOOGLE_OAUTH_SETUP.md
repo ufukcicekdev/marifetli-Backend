@@ -17,9 +17,11 @@
 SOCIAL_AUTH_GOOGLE_OAUTH2_KEY=your_client_id_here
 SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET=your_client_secret_here
 FRONTEND_URL=http://localhost:3000
+# Production:
+# FRONTEND_URL=https://www.marifetli.com.tr
 ```
 
-Production’da `FRONTEND_URL` canlı frontend adresi olmalı (örn. `https://marifetli.com`).
+Production’da `FRONTEND_URL` canlı frontend adresi olmalı (production: `https://www.marifetli.com.tr`).
 
 ## 3. Akış
 

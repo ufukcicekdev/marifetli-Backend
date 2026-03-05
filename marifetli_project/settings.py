@@ -271,10 +271,14 @@ SIMPLE_JWT = {
     "SLIDING_TOKEN_REFRESH_LIFETIME": timedelta(days=1),
 }
 
-# CORS Settings - Frontend: https://marifetli-frontend-production.up.railway.app
+# Frontend URL - .env'den (e-posta linkleri, OAuth redirect, CORS için tek kaynak)
+FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
+
+# CORS - FRONTEND_URL .env'de tanımlı olsun; isteğe bağlı CORS_ALLOWED_ORIGINS ile override
+_CORS_DEFAULT = f"http://localhost:3000,http://127.0.0.1:3000,{FRONTEND_URL.rstrip('/')}"
 CORS_ALLOWED_ORIGINS = config(
     "CORS_ALLOWED_ORIGINS",
-    default="http://localhost:3000,http://127.0.0.1:3000,https://marifetli-frontend-production.up.railway.app",
+    default=_CORS_DEFAULT,
     cast=Csv()
 )
 CORS_ALLOW_CREDENTIALS = True
@@ -325,9 +329,6 @@ SOCIAL_AUTH_POSTGRES_JSONFIELD = True
 # Email / SMTP settings (use .env via python-decouple)
 SMTP2GO_API_KEY = config("SMTP2GO_API_KEY", default="")
 SMTP2GO_FROM_EMAIL = config("SMTP2GO_FROM_EMAIL", default="noreply@marifetli.com")
-
-# Frontend URL for email links
-FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 
 # Firebase Cloud Messaging (push bildirimleri) - .env'e FIREBASE_CREDENTIALS_PATH=path/to/serviceAccountKey.json ekle
 FIREBASE_CREDENTIALS_PATH = config("FIREBASE_CREDENTIALS_PATH", default="")
