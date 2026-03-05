@@ -274,16 +274,25 @@ SIMPLE_JWT = {
 # Frontend URL - .env'den (e-posta linkleri, OAuth redirect, CORS için tek kaynak)
 FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 
-# CORS - FRONTEND_URL .env'de tanımlı olsun; isteğe bağlı CORS_ALLOWED_ORIGINS ile override
-_CORS_DEFAULT = f"http://localhost:3000,http://127.0.0.1:3000,{FRONTEND_URL.rstrip('/')}"
+# CORS - FRONTEND_URL .env'de tanımlı; aynı domain'in www / www'süz hali de eklenir
+def _cors_origins_list():
+    base = FRONTEND_URL.rstrip("/")
+    origins = ["http://localhost:3000", "http://127.0.0.1:3000", base]
+    if base.startswith("https://www."):
+        origins.append(base.replace("https://www.", "https://", 1))
+    elif base.startswith("https://") and "www." not in base:
+        origins.append(base.replace("https://", "https://www.", 1))
+    return ",".join(origins)
+
 CORS_ALLOWED_ORIGINS = config(
     "CORS_ALLOWED_ORIGINS",
-    default=_CORS_DEFAULT,
+    default=_cors_origins_list(),
     cast=Csv()
 )
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_METHODS = ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"]
 CORS_ALLOW_HEADERS = ["accept", "accept-encoding", "authorization", "content-type", "origin", "user-agent", "x-csrftoken", "x-requested-with"]
+CORS_EXPOSE_HEADERS = ["content-type", "content-length"]
 
 # Cookie / Security (production)
 CSRF_COOKIE_SECURE = not DEBUG
