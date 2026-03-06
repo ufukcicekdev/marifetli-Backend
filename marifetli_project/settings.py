@@ -328,7 +328,8 @@ CSRF_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SAMESITE = "Lax"
 
 if not DEBUG:
-    SECURE_SSL_REDIRECT = True
+    # Railway proxy SSL'i sonlandırır; container'a HTTP gelir. Redirect kapatıyoruz ki healthcheck 200 alsın.
+    SECURE_SSL_REDIRECT = False
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # Social Auth Settings
