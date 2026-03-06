@@ -17,7 +17,9 @@ from .models import UserProfile, Follow, UserNotificationPreference
 from .serializers import UserSerializer, UserProfileSerializer, FollowSerializer, UserNotificationPreferenceSerializer
 from emails.services import EmailService
 from users.utils import generate_verification_token
+import logging
 
+logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
@@ -296,24 +298,24 @@ def request_password_reset(request):
     try:
         user = User.objects.get(email=email)
     except User.DoesNotExist:
-        # Don't reveal if email exists or not for security
-        return Response({'message': 'If the email exists, a password reset link has been sent.'}, status=status.HTTP_200_OK)
-    
-    # Generate reset token
+        return Response({
+            'error': 'Bu e-posta adresi sistemimizde kayıtlı değil. Lütfen kayıtlı e-posta adresinizi girin veya yeni hesap oluşturun.',
+        }, status=status.HTTP_404_NOT_FOUND)
+
+    # Sadece kayıtlı üye için token üret ve e-posta gönder
     token = generate_verification_token()
     user.password_reset_token = token
     user.password_reset_token_expiry = timezone.now() + timedelta(hours=1)
     user.save()
-    
-    # Send password reset email
+
     try:
         EmailService.send_password_reset_email(user, token)
-        return Response({'message': 'If the email exists, a password reset link has been sent.'}, status=status.HTTP_200_OK)
     except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"Failed to send password reset email: {e}")
-        return Response({'error': 'Failed to send email. Please try again later.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logger.error("Şifre sıfırlama e-postası gönderilemedi: %s", e)
+        return Response({'error': 'E-posta gönderilemedi. Lütfen daha sonra tekrar deneyin.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    return Response({
+        'message': 'Bu e-posta adresi sistemimizde kayıtlıysa, şifre sıfırlama bağlantısı e-posta adresinize gönderilmiştir. Gelen kutunuzu ve istenmeyen klasörünüzü kontrol edin.',
+    }, status=status.HTTP_200_OK)
 
 
 @api_view(['POST'])

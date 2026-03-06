@@ -8,6 +8,40 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _get_email_base_url():
+    """E-posta içindeki mutlak URL'ler (logo vb.) için base URL. BACKEND_URL yoksa ALLOWED_HOSTS'tan türetir."""
+    base = getattr(settings, 'BACKEND_URL', None) or ''
+    if base:
+        return base.rstrip('/')
+    hosts = getattr(settings, 'ALLOWED_HOSTS', []) or []
+    for h in hosts:
+        if h and str(h).strip() not in ('localhost', '127.0.0.1') and '.' in str(h):
+            return 'https://' + str(h).strip()
+    return ''
+
+
+def _get_email_base_context():
+    """Site ayarlarından logo ve site adını alır; e-posta şablonlarına verilir."""
+    try:
+        from core.models import SiteConfiguration
+        config = SiteConfiguration.objects.first()
+        if not config:
+            return {'logo_url': None, 'site_name': 'Marifetli'}
+        logo_url = None
+        if getattr(config, 'logo', None) and config.logo:
+            base = _get_email_base_url()
+            if base:
+                # config.logo.url zaten / ile başlar (örn. /media/site/logo.png)
+                logo_url = base + config.logo.url
+        return {
+            'logo_url': logo_url,
+            'site_name': getattr(config, 'site_name', None) or 'Marifetli',
+        }
+    except Exception as e:
+        logger.debug("Email base context (logo): %s", e)
+        return {'logo_url': None, 'site_name': 'Marifetli'}
+
+
 class EmailService:
     """Central email service for handling all email sending operations"""
     
@@ -104,7 +138,12 @@ class EmailService:
         except EmailTemplate.DoesNotExist:
             logger.error(f"Email template '{template_type}' not found")
             return None
-        
+
+        # Tüm e-posta şablonlarında logo ve site adı kullanılabilsin
+        base_ctx = _get_email_base_context()
+        merged_context = {**base_ctx, **(context or {})}
+        context = merged_context
+
         # Render template with context (template.html_content is e.g. 'emails/verification_email.html')
         subject = template.subject.format(**context) if context else template.subject
         html_content = render_to_string(template.html_content, context) if template.html_content else ''

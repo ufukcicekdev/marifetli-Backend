@@ -274,6 +274,8 @@ SIMPLE_JWT = {
 
 # Frontend URL - .env'den (e-posta linkleri, OAuth redirect, CORS için tek kaynak)
 FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
+# Backend URL - e-posta şablonlarındaki logo vb. mutlak URL'ler için (örn. https://api.marifetli.com.tr)
+BACKEND_URL = config("BACKEND_URL", default="").strip().rstrip("/") or None
 
 # CORS - FRONTEND_URL .env'de tanımlı; aynı domain'in www / www'süz hali de eklenir
 def _cors_origins_list():
@@ -299,7 +301,7 @@ CORS_EXPOSE_HEADERS = ["content-type", "content-length"]
 # Canlıda BACKEND_URL veya CSRF_TRUSTED_ORIGINS tanımlayın (örn. Railway'de BACKEND_URL=https://web-production-5404d.up.railway.app)
 def _csrf_trusted_origins_list():
     origins = ["http://localhost:8000", "http://127.0.0.1:8000"]
-    backend_url = config("BACKEND_URL", default="").strip().rstrip("/")
+    backend_url = (BACKEND_URL or "").strip().rstrip("/")
     if backend_url:
         origins.append(backend_url)
     # ALLOWED_HOSTS'tan ilk non-local host varsa https ile ekle (canlıda BACKEND_URL unutulursa)
