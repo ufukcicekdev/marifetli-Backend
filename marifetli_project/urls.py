@@ -23,13 +23,9 @@ from django.conf.urls.static import static
 
 
 def root_view(request):
-    """Backend kök URL: API bilgisi veya admin'e yönlendirme."""
+    """Backend kök URL: sadece uygulama adı, admin/api yolları açıklanmaz."""
     if request.path.rstrip('/') == '':
-        return JsonResponse({
-            'name': 'Marifetli API',
-            'admin': '/admin/',
-            'api': '/api/',
-        })
+        return JsonResponse({'name': 'Marifetli API'})
     from django.http import Http404
     raise Http404()
 
