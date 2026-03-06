@@ -1,3 +1,6 @@
+import base64
+import mimetypes
+import os
 import requests
 from django.conf import settings
 from django.template.loader import render_to_string
@@ -9,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def _get_email_base_url():
-    """E-posta içindeki mutlak URL'ler (logo vb.) için base URL. BACKEND_URL yoksa ALLOWED_HOSTS'tan türetir."""
+    """E-posta içindeki mutlak URL'ler için base URL (logo artık base64 kullanıyor)."""
     base = getattr(settings, 'BACKEND_URL', None) or ''
     if base:
         return base.rstrip('/')
@@ -20,26 +23,63 @@ def _get_email_base_url():
     return ''
 
 
+def _logo_to_data_uri(logo_field):
+    """Logo dosyasını base64 data URI'ye çevirir; e-postada dış URL'ye ihtiyaç kalmaz."""
+    if not logo_field:
+        return None
+    try:
+        data = None
+        path = getattr(logo_field, 'path', None)
+        if path and os.path.exists(path):
+            with open(path, 'rb') as f:
+                data = f.read()
+            name = path
+        else:
+            # Remote storage (S3 vb.): dosyayı açıp oku
+            try:
+                logo_field.open('rb')
+                data = logo_field.read()
+                name = getattr(logo_field, 'name', '') or ''
+            finally:
+                logo_field.close()
+        if not data:
+            return None
+        b64 = base64.b64encode(data).decode('ascii')
+        mime, _ = mimetypes.guess_type(name)
+        mime = mime or 'image/png'
+        return f"data:{mime};base64,{b64}"
+    except Exception as e:
+        logger.debug("Logo base64: %s", e)
+        return None
+
+
 def _get_email_base_context():
-    """Site ayarlarından logo ve site adını alır; e-posta şablonlarına verilir."""
+    """Site ayarlarından logo (base64 gömülü) ve site adını alır; e-posta şablonlarına verilir."""
     try:
         from core.models import SiteConfiguration
         config = SiteConfiguration.objects.first()
         if not config:
-            return {'logo_url': None, 'site_name': 'Marifetli'}
+            return {'logo_url': None, 'logo_data_uri': None, 'site_name': 'Marifetli'}
+        logo_data_uri = None
         logo_url = None
         if getattr(config, 'logo', None) and config.logo:
-            base = _get_email_base_url()
-            if base:
-                # config.logo.url zaten / ile başlar (örn. /media/site/logo.png)
-                logo_url = base + config.logo.url
+            logo_data_uri = _logo_to_data_uri(config.logo)
+            if not logo_data_uri:
+                raw_url = config.logo.url
+                if raw_url and (raw_url.startswith('http://') or raw_url.startswith('https://')):
+                    logo_url = raw_url
+                else:
+                    base = _get_email_base_url()
+                    if base and raw_url:
+                        logo_url = base + (raw_url if raw_url.startswith('/') else '/' + raw_url)
         return {
             'logo_url': logo_url,
+            'logo_data_uri': logo_data_uri,
             'site_name': getattr(config, 'site_name', None) or 'Marifetli',
         }
     except Exception as e:
         logger.debug("Email base context (logo): %s", e)
-        return {'logo_url': None, 'site_name': 'Marifetli'}
+        return {'logo_url': None, 'logo_data_uri': None, 'site_name': 'Marifetli'}
 
 
 class EmailService:
