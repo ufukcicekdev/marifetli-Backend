@@ -13,6 +13,8 @@ def _default_site_settings_response():
         'social_links': [],
         'google_analytics_id': '',
         'google_search_console_meta': '',
+        'logo_url': None,
+        'favicon_url': None,
     })
 
 
@@ -33,6 +35,12 @@ def public_site_settings(request):
         return _default_site_settings_response()
     if not config:
         return _default_site_settings_response()
+    logo_url = None
+    favicon_url = None
+    if getattr(config, 'logo', None) and config.logo:
+        logo_url = request.build_absolute_uri(config.logo.url)
+    if getattr(config, 'favicon', None) and config.favicon:
+        favicon_url = request.build_absolute_uri(config.favicon.url)
     return Response({
         'contact': {
             'email': config.contact_email or '',
@@ -43,6 +51,8 @@ def public_site_settings(request):
         'social_links': social,
         'google_analytics_id': config.google_analytics_id or '',
         'google_search_console_meta': config.google_search_console_meta or '',
+        'logo_url': logo_url,
+        'favicon_url': favicon_url,
     })
 
 

@@ -295,6 +295,29 @@ CORS_ALLOW_METHODS = ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"]
 CORS_ALLOW_HEADERS = ["accept", "accept-encoding", "authorization", "content-type", "origin", "user-agent", "x-csrftoken", "x-requested-with"]
 CORS_EXPOSE_HEADERS = ["content-type", "content-length"]
 
+# CSRF - Admin ve form POST'ları için Origin güvenilir listesi (Django 4+)
+# Canlıda BACKEND_URL veya CSRF_TRUSTED_ORIGINS tanımlayın (örn. Railway'de BACKEND_URL=https://web-production-5404d.up.railway.app)
+def _csrf_trusted_origins_list():
+    origins = ["http://localhost:8000", "http://127.0.0.1:8000"]
+    backend_url = config("BACKEND_URL", default="").strip().rstrip("/")
+    if backend_url:
+        origins.append(backend_url)
+    # ALLOWED_HOSTS'tan ilk non-local host varsa https ile ekle (canlıda BACKEND_URL unutulursa)
+    for h in ALLOWED_HOSTS:
+        if h and h not in ("localhost", "127.0.0.1") and "." in h:
+            origins.append(f"https://{h}")
+            break
+    frontend = FRONTEND_URL.rstrip("/")
+    if frontend and frontend not in origins:
+        origins.append(frontend)
+    return origins
+
+CSRF_TRUSTED_ORIGINS = config(
+    "CSRF_TRUSTED_ORIGINS",
+    default=",".join(_csrf_trusted_origins_list()),
+    cast=Csv(),
+)
+
 # Cookie / Security (production)
 CSRF_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_SECURE = not DEBUG

@@ -7,6 +7,10 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
     list_display = ['site_name', 'contact_email', 'contact_phone', 'updated_at']
     fieldsets = (
         ('Genel', {'fields': ('site_name', 'site_description')}),
+        ('Logo & Favicon', {
+            'fields': ('logo', 'favicon'),
+            'description': 'Site logosu (header) ve tarayıcı sekmesi ikonu (favicon).',
+        }),
         ('İletişim', {'fields': ('contact_email', 'contact_phone', 'contact_address', 'contact_description')}),
         ('Google Analytics & Search Console', {
             'fields': ('google_analytics_id', 'google_search_console_meta'),

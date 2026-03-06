@@ -14,10 +14,12 @@ class BaseModel(models.Model):
 
 class SiteConfiguration(models.Model):
     """
-    Site-wide configuration (tek kayıt: iletişim, analytics). Admin panelden düzenlenir.
+    Site-wide configuration (tek kayıt: iletişim, analytics, logo, favicon). Admin panelden düzenlenir.
     """
     site_name = models.CharField(max_length=200, default='Marifetli')
     site_description = models.TextField(blank=True)
+    logo = models.ImageField(upload_to='site/', blank=True, null=True, help_text='Site logosu (header vb.)')
+    favicon = models.ImageField(upload_to='site/', blank=True, null=True, help_text='Tarayıcı sekmesi ikonu (.ico veya .png)')
     contact_email = models.EmailField(blank=True)
     contact_phone = models.CharField(max_length=50, blank=True)
     contact_address = models.TextField(blank=True)
