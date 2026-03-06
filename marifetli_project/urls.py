@@ -16,11 +16,25 @@ Including another URLconf
 """
 
 from django.contrib import admin
+from django.http import JsonResponse
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 
+
+def root_view(request):
+    """Backend kök URL: API bilgisi veya admin'e yönlendirme."""
+    if request.path.rstrip('/') == '':
+        return JsonResponse({
+            'name': 'Marifetli API',
+            'admin': '/admin/',
+            'api': '/api/',
+        })
+    from django.http import Http404
+    raise Http404()
+
 urlpatterns = [
+    path('', root_view),
     path('admin/', admin.site.urls),
     path('api/', include('core.urls')),
     path('api/auth/', include('users.urls')),
