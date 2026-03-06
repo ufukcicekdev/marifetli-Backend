@@ -7,8 +7,9 @@
 3. Consent screen ayarlanmamışsa önce **OAuth consent screen** (Test veya Production) yapılandır.
 4. Application type: **Web application**.
 5. **Authorized redirect URIs** kısmına backend callback adresini ekle:
-   - Yerel: `http://localhost:8000/api/auth/complete/google-oauth2/`
-   - Canlı: `https://your-backend-domain.com/api/auth/complete/google-oauth2/`
+   - `http://localhost:8000/api/auth/complete/google-oauth2/`
+   - `http://127.0.0.1:8000/api/auth/complete/google-oauth2/` (yerel için ikisini de ekle)
+   - Canlı: `https://web-production-5404d.up.railway.app/api/auth/complete/google-oauth2/`
 6. **Create** → Client ID ve Client Secret’ı kopyala.
 
 ## 2. Backend .env
@@ -37,3 +38,11 @@ Production’da `FRONTEND_URL` canlı frontend adresi olmalı (production: `http
 - **Redirect URI mismatch**: Google Console’daki redirect URI, backend’in tam adresiyle birebir aynı olmalı (sonunda `/` dahil).
 - **403 / Access blocked**: OAuth consent screen’de test kullanıcısı ekle (Production’a almadıysan).
 - **Key/Secret boş**: `.env` dosyasında `SOCIAL_AUTH_GOOGLE_OAUTH2_KEY` ve `SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET` dolu olmalı.
+- **401 / Invalid key/secret, perhaps expired** (token değişiminde hata):
+  1. [Google Cloud Console](https://console.cloud.google.com/) → Credentials → ilgili OAuth 2.0 Client ID’ye tıkla.
+  2. **Client ID** ve **Client secret** değerlerini `.env` ile birebir karşılaştır (boşluk, fazladan karakter olmasın).
+  3. Client secret’ı **yeniden oluşturduysan** eski secret geçersizdir; yeni secret’ı `.env`’e yapıştır.
+  4. Yerel test için **Authorized redirect URIs** listesinde şunlardan biri tam olarak olmalı:
+     - `http://127.0.0.1:8000/api/auth/complete/google-oauth2/`
+     - veya `http://localhost:8000/api/auth/complete/google-oauth2/`
+  5. Değişiklikten sonra backend’i yeniden başlat.

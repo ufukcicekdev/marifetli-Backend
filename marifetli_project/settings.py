@@ -344,7 +344,8 @@ SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = config("SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET", de
 
 # OAuth sonrası JWT üretip frontend'e yönlendirilecek URL (backend view)
 LOGIN_REDIRECT_URL = "/api/auth/oauth-success/"
-# OAuth başarısız olursa (frontend'e hata ile yönlendir)
+# OAuth başarısız olursa (frontend'e hata ile yönlendir); 500 yerine yönlendirme için False
+SOCIAL_AUTH_RAISE_EXCEPTIONS = False
 LOGIN_ERROR_URL = "/api/auth/oauth-error/"
 
 SOCIAL_AUTH_PIPELINE = (
