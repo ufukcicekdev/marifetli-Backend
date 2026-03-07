@@ -2,6 +2,8 @@ from rest_framework import serializers
 from .models import SavedCollection, SavedItem
 from questions.models import Question
 from questions.serializers import QuestionListSerializer
+from blog.models import BlogPost
+from blog.serializers import BlogPostListSerializer
 
 
 class SavedCollectionSerializer(serializers.ModelSerializer):
@@ -18,10 +20,11 @@ class SavedCollectionSerializer(serializers.ModelSerializer):
 
 class SavedItemSerializer(serializers.ModelSerializer):
     question = serializers.SerializerMethodField()
+    blog_post = serializers.SerializerMethodField()
 
     class Meta:
         model = SavedItem
-        fields = ('id', 'collection', 'question', 'created_at')
+        fields = ('id', 'collection', 'question', 'blog_post', 'created_at')
         read_only_fields = ('id', 'created_at')
 
     def get_question(self, obj):
@@ -29,4 +32,11 @@ class SavedItemSerializer(serializers.ModelSerializer):
             q = Question.objects.filter(pk=obj.object_id).first()
             if q:
                 return QuestionListSerializer(q).data
+        return None
+
+    def get_blog_post(self, obj):
+        if obj.content_type.model == 'blogpost':
+            post = BlogPost.objects.filter(pk=obj.object_id).first()
+            if post:
+                return BlogPostListSerializer(post, context=self.context).data
         return None
