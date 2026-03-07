@@ -27,6 +27,20 @@ class BlogPostListView(generics.ListAPIView):
         )
 
 
+class BlogPostPopularListView(generics.ListAPIView):
+    """En çok okunan ilk 3 blog yazısı (view_count azalan). Sayfalama yok."""
+    permission_classes = [AllowAny]
+    serializer_class = BlogPostListSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        return (
+            BlogPost.objects.filter(is_published=True)
+            .select_related('author')
+            .order_by('-view_count', '-published_at')[:3]
+        )
+
+
 class BlogPostDetailView(generics.RetrieveAPIView):
     """Tekil blog yazısı (görüntülenme artar). Yorumlar dahil."""
     permission_classes = [AllowAny]

@@ -14,8 +14,11 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from django.contrib.auth import get_user_model
 from .models import UserProfile, UserNotificationPreference
+from emails.services import EmailService
+import logging
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 def get_username_from_email(strategy, details, *args, **kwargs):
@@ -72,6 +75,11 @@ def set_social_user_verified(backend, user, is_new=False, **kwargs):
     if is_new:
         UserProfile.objects.get_or_create(user=user)
         UserNotificationPreference.objects.get_or_create(user=user)
+        # Google ile yeni kayıt: hoşgeldin maili gönder (normal kayıtta doğrulama sonrası gidiyor)
+        try:
+            EmailService.send_welcome_email(user)
+        except Exception as e:
+            logger.warning("Google OAuth hoşgeldin maili gönderilemedi: %s", e)
     return {"user": user}
 
 
