@@ -74,6 +74,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "social_django.middleware.SocialAuthExceptionMiddleware",
+    "users.middleware.ClearSessionBeforeGoogleOAuthMiddleware",
 ]
 
 ROOT_URLCONF = "marifetli_project.urls"
@@ -326,6 +327,8 @@ CSRF_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SAMESITE = "Lax"
+# OAuth akışında session'ın kaybolmaması için her istekte kaydet
+SESSION_SAVE_EVERY_REQUEST = True
 
 if not DEBUG:
     # Railway proxy SSL'i sonlandırır; container'a HTTP gelir. Redirect kapatıyoruz ki healthcheck 200 alsın.
@@ -342,10 +345,12 @@ AUTHENTICATION_BACKENDS = [
 SOCIAL_AUTH_GOOGLE_OAUTH2_KEY = config("SOCIAL_AUTH_GOOGLE_OAUTH2_KEY", default="")
 SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET = config("SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET", default="")
 
-# OAuth sonrası JWT üretip frontend'e yönlendirilecek URL (backend view)
-LOGIN_REDIRECT_URL = "/api/auth/oauth-success/"
-# OAuth başarısız olursa (frontend'e hata ile yönlendir); 500 yerine yönlendirme için False
-SOCIAL_AUTH_RAISE_EXCEPTIONS = False
+# OAuth sonrası JWT üretip frontend'e yönlendirilecek URL (backend view).
+# Tam URL kullanıyoruz ki Google'dan dönüşte aynı domain'e gidilsin, session cookie gitsin.
+BACKEND_BASE = (config("BACKEND_URL", default="").strip().rstrip("/") or "http://localhost:8000")
+LOGIN_REDIRECT_URL = f"{BACKEND_BASE}/api/auth/oauth-success/"
+# OAuth hata durumunda: False = frontend'e yönlendir, True = 500 + terminalde tam hata (debug için)
+SOCIAL_AUTH_RAISE_EXCEPTIONS = config("SOCIAL_AUTH_RAISE_EXCEPTIONS", default=False, cast=bool)
 LOGIN_ERROR_URL = "/api/auth/oauth-error/"
 
 SOCIAL_AUTH_PIPELINE = (
@@ -360,6 +365,7 @@ SOCIAL_AUTH_PIPELINE = (
     "social_core.pipeline.social_auth.load_extra_data",
     "social_core.pipeline.user.user_details",
     "users.pipeline.set_social_user_verified",
+    "users.pipeline.redirect_to_frontend_with_jwt",  # JWT + redirect; session kullanılmaz
 )
 
 SOCIAL_AUTH_POSTGRES_JSONFIELD = True

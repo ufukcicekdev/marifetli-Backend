@@ -1,10 +1,24 @@
 from django.utils.deprecation import MiddlewareMixin
 from django.http import JsonResponse
-from django.contrib.auth import get_user_model
+from django.contrib.auth import get_user_model, logout
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 
 User = get_user_model()
+
+
+class ClearSessionBeforeGoogleOAuthMiddleware(MiddlewareMixin):
+    """
+    Google OAuth başlatma isteğinde (login/google-oauth2/) session'ı temizler.
+    Böylece eski link veya doğrudan bu URL ile gidilse bile farklı Gmail ile doğru kullanıcıya giriş yapılır.
+    """
+    def process_request(self, request):
+        if request.method != "GET":
+            return None
+        path = request.path.rstrip("/")
+        if path.endswith("/api/auth/login/google-oauth2"):
+            logout(request)
+        return None
 
 
 class JWTMiddleware(MiddlewareMixin):

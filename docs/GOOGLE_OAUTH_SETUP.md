@@ -18,20 +18,23 @@
 SOCIAL_AUTH_GOOGLE_OAUTH2_KEY=your_client_id_here
 SOCIAL_AUTH_GOOGLE_OAUTH2_SECRET=your_client_secret_here
 FRONTEND_URL=http://localhost:3000
+# OAuth sonrası yönlendirme backend’e aynı host’tan gitsin diye (session cookie için). Boşsa yerel için http://localhost:8000 kullanılır.
+# BACKEND_URL=http://localhost:8000
 # Production:
 # FRONTEND_URL=https://www.marifetli.com.tr
+# BACKEND_URL=https://api.marifetli.com.tr
 ```
 
-Production’da `FRONTEND_URL` canlı frontend adresi olmalı (production: `https://www.marifetli.com.tr`).
+Production’da `FRONTEND_URL` canlı frontend adresi olmalı (production: `https://www.marifetli.com.tr`). Session cookie’nin kaybolmaması için canlıda `BACKEND_URL` de backend’in tam adresi olmalı.
 
 ## 3. Akış
 
-1. Kullanıcı “Google ile devam et”e tıklar → frontend backend’e yönlendirir: `/api/auth/login/google-oauth2/`.
+1. Kullanıcı “Google ile devam et”e tıklar → frontend **önce** `/api/auth/start-google-login/` ile backend session’ı temizler, sonra `/api/auth/login/google-oauth2/` ile Google’a gider.
 2. Backend Google’a yönlendirir.
 3. Kullanıcı Google’da giriş yapar, izin verir.
 4. Google kullanıcıyı backend’e geri gönderir: `/api/auth/complete/google-oauth2/`.
-5. Backend kullanıcıyı oluşturur veya eşleştirir, JWT üretir ve frontend’e yönlendirir: `FRONTEND_URL/auth/callback?access=...&refresh=...`.
-6. Frontend `/auth/callback` sayfası token’ları alır, kaydeder ve ana sayfaya yönlendirir.
+5. Backend pipeline’da kullanıcıyı oluşturur/eşleştirir, **pipeline son adımında** JWT üretir ve doğrudan frontend’e yönlendirir: `FRONTEND_URL/auth/callback#access=...&refresh=...` (session kullanılmaz).
+6. Frontend `/auth/callback` sayfası hash’ten token’ları alır, kaydeder ve ana sayfaya yönlendirir.
 
 ## 4. Sorun giderme
 
@@ -46,3 +49,4 @@ Production’da `FRONTEND_URL` canlı frontend adresi olmalı (production: `http
      - `http://127.0.0.1:8000/api/auth/complete/google-oauth2/`
      - veya `http://localhost:8000/api/auth/complete/google-oauth2/`
   5. Değişiklikten sonra backend’i yeniden başlat.
+- **“Oturum alınamadı” / not_authenticated**: Google’dan dönüşte session cookie backend’e gitmiyordur. Backend terminalinde uyarı log’unda `session_keys`, `_auth_user_id` ve `cookies` değerlerine bak. Boş session/cookie ise: (1) Girişi frontend’den **aynı sekmede** yap (linke tıklayıp backend → Google → backend akışı aynı sekmede olsun). (2) Canlıda `BACKEND_URL` .env’de backend’in tam adresi olarak tanımlı olsun. (3) Tarayıcıda backend ile frontend aynı domain’de değilse (localhost:3000 vs localhost:8000) cookie’ler port bazlı ayrıldığı için sorun olmaz; akışın tamamı backend host’unda (login → complete → oauth-success) olmalı.

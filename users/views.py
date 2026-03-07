@@ -3,13 +3,14 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
-from django.contrib.auth import authenticate
+from django.contrib.auth import authenticate, logout
 from django.contrib.auth import get_user_model
 from django.db.models import F
 from django.db.models.functions import Greatest
 from django.utils import timezone
 from django.shortcuts import redirect
 from django.conf import settings
+from django.urls import reverse
 from urllib.parse import urlencode
 from datetime import timedelta
 from core.permissions import IsVerified
@@ -92,16 +93,42 @@ def oauth_success(request):
     Google OAuth tamamlandıktan sonra social_django buraya yönlendirir.
     Session'daki kullanıcıya JWT üretir ve frontend /auth/callback sayfasına token'larla yönlendirir.
     """
-    if not request.user.is_authenticated:
-        frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000")
-        return redirect(f"{frontend_url}/auth/callback?error=not_authenticated")
     user = request.user
+    if not user.is_authenticated:
+        # Session'da _auth_user_id var ama request.user yüklenmemiş olabilir (social backend get_user uyumsuzluğu)
+        sess = getattr(request, "session", None)
+        auth_user_id = sess.get("_auth_user_id") if sess else None
+        if auth_user_id is not None:
+            try:
+                user = User.objects.get(pk=auth_user_id)
+            except (User.DoesNotExist, ValueError, TypeError):
+                user = None
+        if user is None or not getattr(user, "pk", None):
+            logger.warning(
+                "OAuth success: user not authenticated. _auth_user_id=%s cookies=%s",
+                auth_user_id,
+                list(request.COOKIES.keys()) if request.COOKIES else [],
+            )
+            frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000")
+            return redirect(f"{frontend_url}/auth/callback?error=not_authenticated")
     refresh = RefreshToken.for_user(user)
     access = str(refresh.access_token)
     refresh_str = str(refresh)
     frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000").rstrip("/")
     params = urlencode({"access": access, "refresh": refresh_str})
-    return redirect(f"{frontend_url}/auth/callback?{params}")
+    # Token'ları # ile gönderiyoruz; query string uzun JWT'de kesilebiliyor
+    return redirect(f"{frontend_url}/auth/callback#{params}")
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def start_google_login(request):
+    """
+    Google OAuth'a gitmeden önce backend session'ı temizler.
+    Böylece farklı bir Gmail ile giriş yapıldığında eski kullanıcıya bağlanmaz.
+    """
+    logout(request)
+    return redirect(reverse("social:begin", args=["google-oauth2"]))
 
 
 @api_view(['GET'])
@@ -111,6 +138,24 @@ def oauth_error(request):
     frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000").rstrip("/")
     error = request.GET.get("error", "oauth_failed")
     return redirect(f"{frontend_url}/auth/callback?error={error}")
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def oauth_redirect_uri_debug(request):
+    """
+    Google OAuth redirect URI'yi gösterir. Bu adresi Google Console'da
+    Authorized redirect URIs listesine birebir eklemen gerekir.
+    """
+    try:
+        complete_path = reverse("social:complete", args=("google-oauth2",))
+        redirect_uri = request.build_absolute_uri(complete_path)
+    except Exception:
+        redirect_uri = request.build_absolute_uri("/api/auth/complete/google-oauth2/")
+    return Response({
+        "redirect_uri": redirect_uri,
+        "message": "Bu adresi Google Cloud Console → Credentials → OAuth client → Authorized redirect URIs listesine birebir ekle.",
+    })
 
 
 @api_view(['POST'])
