@@ -15,6 +15,7 @@ class Notification(models.Model):
         ('mention', 'User Mentioned'),
         ('best_answer', 'Best Answer Selected'),
         ('followed_post', 'Followed User Posted'),
+        ('moderation_removed', 'Moderatör tarafından içerik kaldırıldı'),
     ]
 
     recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')

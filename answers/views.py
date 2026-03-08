@@ -2,6 +2,7 @@ from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
 from django.contrib.auth import get_user_model
 from core.permissions import IsVerified
 from .models import Answer, AnswerLike, AnswerReport
@@ -31,8 +32,29 @@ class AnswerListView(generics.ListCreateAPIView):
         question_id = self.kwargs['question_id']
         parent = serializer.validated_data.get('parent')
         if parent and parent.question_id != question_id:
-            from rest_framework.exceptions import ValidationError
             raise ValidationError({'parent': 'Parent answer must belong to this question.'})
+        content = (serializer.validated_data.get("content") or "")
+        from moderation.services import (
+            check_text_bad_words,
+            llm_moderate,
+            notify_user_moderation_removed,
+            save_suggested_bad_words,
+        )
+        has_bad, _ = check_text_bad_words(content)
+        if has_bad:
+            raise ValidationError(
+                {"detail": "Yorumunuzda uygun olmayan ifadeler tespit edildi. Lütfen metni düzenleyin."}
+            )
+        status, bad_words = llm_moderate(content)
+        if status == "RED":
+            save_suggested_bad_words(bad_words)
+            notify_user_moderation_removed(
+                self.request.user,
+                "Moderatör tarafından yorumunuz kaldırıldı. Kurallara aykırı içerik tespit edildi.",
+            )
+            raise ValidationError(
+                {"detail": "Yorumunuz moderasyon kurallarına aykırı bulundu ve yayına alınamadı. Bildirim gönderildi."}
+            )
         answer = serializer.save(author=self.request.user, question_id=question_id, parent=parent)
         from questions.models import Question
         q = Question.objects.get(pk=question_id)

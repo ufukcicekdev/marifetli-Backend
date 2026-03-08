@@ -1,10 +1,62 @@
 """
-Moderation System - User ban, shadow ban, admin logs
+Moderation System - User ban, shadow ban, admin logs, bad word list, LLM moderation
 """
 from django.db import models
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
+
+
+class BadWord(models.Model):
+    """Kötü kelime listesi - yorum/soru metninde eşleşirse kullanıcı uyarılır."""
+    word = models.CharField(max_length=100, unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        from .services import invalidate_bad_word_cache
+        invalidate_bad_word_cache()
+
+    def delete(self, *args, **kwargs):
+        super().delete(*args, **kwargs)
+        from .services import invalidate_bad_word_cache
+        invalidate_bad_word_cache()
+
+    class Meta:
+        ordering = ['word']
+        verbose_name = 'Kötü kelime'
+        verbose_name_plural = 'Kötü kelimeler'
+
+    def __str__(self):
+        return self.word
+
+
+class SuggestedBadWord(models.Model):
+    """
+    LLM'den dönen önerilen kötü kelimeler. Doğrudan BadWord'e eklenmez;
+    admin onayı ile Onayla -> BadWord'e eklenir, Reddet -> reddedilir.
+    (Örn. "makrome" el işi adı olarak dönmüş olabilir, küfür değildir.)
+    """
+    STATUS_CHOICES = [
+        ("pending", "Beklemede"),
+        ("approved", "Onaylandı (BadWord'e eklendi)"),
+        ("rejected", "Reddedildi"),
+    ]
+    word = models.CharField(max_length=100)
+    source = models.CharField(max_length=50, default="llm")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    note = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Önerilen kötü kelime"
+        verbose_name_plural = "Önerilen kötü kelimeler"
+
+    def __str__(self):
+        return f"{self.word} ({self.get_status_display()})"
 
 
 class UserBan(models.Model):

@@ -399,3 +399,11 @@ else:
 # Cache TTL (saniye): soru listesi vb. liste sayfaları
 CACHE_TTL_QUESTION_LIST = config("CACHE_TTL_QUESTION_LIST", default=60, cast=int)  # 1 dakika
 CACHE_TTL_QUESTION_DETAIL = config("CACHE_TTL_QUESTION_DETAIL", default=30, cast=int)  # 30 sn
+
+# Moderation - LLM servisi. POST { "text": "..." } -> { "status": "ONAY"|"RED", "bad_words": [] }
+# RED + bad_words: önerilen kelimeler SuggestedBadWord'e pending yazılır, admin onayı ile BadWord'e eklenir.
+# config'ten (env) verilmezse boş; boşsa LLM çağrısı yapılmaz.
+MODERATION_LLM_URL = config("MODERATION_LLM_URL", default="").strip()
+MODERATION_LLM_TIMEOUT = config("MODERATION_LLM_TIMEOUT", default=10, cast=int)
+# Bildirimlerde "moderatör" olarak kullanılacak sistem kullanıcı kullanıcı adı (yoksa ilk superuser)
+MODERATOR_SYSTEM_USERNAME = config("MODERATOR_SYSTEM_USERNAME", default="system_moderator")

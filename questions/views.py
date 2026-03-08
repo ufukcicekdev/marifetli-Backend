@@ -2,6 +2,7 @@ from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.conf import settings
@@ -60,6 +61,35 @@ class QuestionListView(generics.ListCreateAPIView):
         return response
 
     def perform_create(self, serializer):
+        data = serializer.validated_data
+        text = " ".join(
+            str(s) for s in [
+                data.get("title") or "",
+                data.get("description") or "",
+                data.get("content") or "",
+            ]
+        )
+        from moderation.services import (
+            check_text_bad_words,
+            llm_moderate,
+            notify_user_moderation_removed,
+            save_suggested_bad_words,
+        )
+        has_bad, words = check_text_bad_words(text)
+        if has_bad:
+            raise ValidationError(
+                {"detail": "İçeriğinizde uygun olmayan ifadeler tespit edildi. Lütfen metni düzenleyin."}
+            )
+        status, bad_words = llm_moderate(text)
+        if status == "RED":
+            save_suggested_bad_words(bad_words)
+            notify_user_moderation_removed(
+                self.request.user,
+                "Moderatör tarafından içeriğiniz kaldırıldı. Kurallara aykırı içerik tespit edildi.",
+            )
+            raise ValidationError(
+                {"detail": "İçeriğiniz moderasyon kurallarına aykırı bulundu ve yayına alınamadı. Bildirim gönderildi."}
+            )
         serializer.save(author=self.request.user)
         invalidate_question_list()
 
