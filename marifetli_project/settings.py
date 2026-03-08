@@ -61,6 +61,7 @@ INSTALLED_APPS = [
     "achievements",
     "emails",
     "blog",
+    "communities",
 ]
 
 MIDDLEWARE = [

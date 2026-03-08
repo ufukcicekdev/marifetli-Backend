@@ -41,6 +41,7 @@ urlpatterns = [
     path('api/onboarding/', include('onboarding.urls')),
     path('api/achievements/', include('achievements.urls')),
     path('api/blog/', include('blog.urls')),
+    path('api/communities/', include('communities.urls')),
     path('api/favorites/', include('favorites.urls')),
     path('api/emails/', include('emails.urls')),
     path('api-auth/', include('rest_framework.urls')),
