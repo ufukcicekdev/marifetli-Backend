@@ -21,6 +21,7 @@ class OnboardingStep(models.Model):
     step_type = models.CharField('Tip', max_length=20, choices=STEP_TYPES, default='custom')
     order = models.PositiveIntegerField('Sıra', default=0)
     is_active = models.BooleanField('Aktif', default=True)
+    is_optional = models.BooleanField('Atlanabilir', default=False, help_text='True ise kullanıcı seçim yapmadan ilerleyebilir')
     max_selections = models.PositiveIntegerField('Maks. seçim', default=0, help_text='0 = sınırsız')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -78,7 +79,7 @@ class UserOnboarding(models.Model):
 
 
 class UserOnboardingSelection(models.Model):
-    """custom adımlar için kullanıcı seçimleri. category/tag için CategoryFollow ve TagFollow kullanılır."""
+    """custom adımlar için kullanıcı seçimleri (cinsiyet, yaş vb.)."""
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='onboarding_selections')
     choice = models.ForeignKey(OnboardingChoice, on_delete=models.CASCADE, related_name='selections')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -90,3 +91,19 @@ class UserOnboardingSelection(models.Model):
 
     def __str__(self):
         return f"{self.user.username} → {self.choice.label}"
+
+
+class UserOnboardingCategorySelection(models.Model):
+    """Kategori adımında kullanıcının seçtiği kategoriler (onboarding kaydı; takip için CategoryFollow da kullanılır)."""
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='onboarding_category_selections')
+    step = models.ForeignKey(OnboardingStep, on_delete=models.CASCADE, related_name='category_selections')
+    category = models.ForeignKey('categories.Category', on_delete=models.CASCADE, related_name='onboarding_selections')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'step', 'category')
+        verbose_name = 'Onboarding Kategori Seçimi'
+        verbose_name_plural = 'Onboarding Kategori Seçimleri'
+
+    def __str__(self):
+        return f"{self.user.username} → {self.step.title}: {self.category.name}"

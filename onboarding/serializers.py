@@ -15,4 +15,4 @@ class OnboardingStepSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = OnboardingStep
-        fields = ['id', 'title', 'description', 'step_type', 'order', 'max_selections', 'choices']
+        fields = ['id', 'title', 'description', 'step_type', 'order', 'max_selections', 'is_optional', 'choices']

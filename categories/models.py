@@ -10,8 +10,20 @@ User = get_user_model()
 
 class Category(models.Model):
     """Main category or subcategory with hierarchical structure"""
+    TARGET_GENDER_CHOICES = [
+        ('hepsi', 'Hepsi (kadın + erkek)'),
+        ('kadin', 'Kadın'),
+        ('erkek', 'Erkek'),
+    ]
     name = models.CharField(max_length=100)
     slug = models.SlugField(max_length=120, unique=True)
+    target_gender = models.CharField(
+        'Hedef cinsiyet',
+        max_length=10,
+        choices=TARGET_GENDER_CHOICES,
+        default='hepsi',
+        help_text='Onboarding\'de hangi cinsiyet seçilince gösterilsin. "Belirtmek istemiyorum" seçilince hepsi gösterilir.'
+    )
     parent = models.ForeignKey(
         'self',
         on_delete=models.CASCADE,

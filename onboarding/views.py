@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.utils import timezone
 from core.permissions import IsVerified
-from .models import OnboardingStep, OnboardingChoice, UserOnboarding, UserOnboardingSelection
+from .models import OnboardingStep, OnboardingChoice, UserOnboarding, UserOnboardingSelection, UserOnboardingCategorySelection
 from .serializers import OnboardingStepSerializer
 from questions.serializers import TagSerializer
 from categories.models import Category, CategoryFollow
@@ -40,6 +40,9 @@ class OnboardingSubmitView(APIView):
 
         user = request.user
 
+        if getattr(step, 'is_optional', False) and not category_ids and not tag_ids and not choice_ids:
+            return Response({'status': 'ok'})
+
         if step.step_type == 'category':
             if not category_ids:
                 return Response({'detail': 'En az bir kategori seçin'}, status=status.HTTP_400_BAD_REQUEST)
@@ -49,6 +52,10 @@ class OnboardingSubmitView(APIView):
                 try:
                     cat = Category.objects.get(pk=cid)
                     CategoryFollow.objects.get_or_create(user=user, category=cat)
+                    UserOnboardingCategorySelection.objects.get_or_create(
+                        user=user, step=step, category=cat,
+                        defaults={}
+                    )
                 except Category.DoesNotExist:
                     pass
 
@@ -105,11 +112,18 @@ class OnboardingStatusView(APIView):
 
 
 class OnboardingCategoriesView(APIView):
-    """Kategori adımı için mevcut kategorileri getir (düz liste)"""
+    """Kategori adımı için mevcut kategorileri getir. gender=kadin|erkek|belirtmiyorum ile cinsiyete göre filtrelenir."""
     permission_classes = [AllowAny]
 
     def get(self, request):
-        cats = Category.objects.all().order_by('parent_id', 'order', 'name').values('id', 'name', 'slug', 'parent_id')
+        from django.db.models import Q
+        gender = (request.query_params.get('gender') or '').strip().lower()
+        qs = Category.objects.all().order_by('parent_id', 'order', 'name')
+        if gender in ('kadin', 'erkek'):
+            qs = qs.filter(Q(target_gender='hepsi') | Q(target_gender=gender))
+        elif gender != 'belirtmiyorum':
+            pass
+        cats = qs.values('id', 'name', 'slug', 'parent_id', 'target_gender')
         return Response(list(cats))
 
 
