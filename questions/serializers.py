@@ -26,10 +26,24 @@ class QuestionListSerializer(serializers.ModelSerializer):
 class QuestionDetailSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
     tags = TagSerializer(many=True, read_only=True)
+    category_slug = serializers.SerializerMethodField()
+    category_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Question
-        fields = '__all__'
+        fields = [
+            'id', 'title', 'slug', 'description', 'content', 'author', 'category', 'tags',
+            'status', 'view_count', 'like_count', 'answer_count', 'is_resolved', 'is_anonymous',
+            'is_deleted', 'deleted_at', 'hot_score', 'meta_title', 'meta_description',
+            'best_answer', 'created_at', 'updated_at',
+            'category_slug', 'category_name',
+        ]
+
+    def get_category_slug(self, obj):
+        return obj.category.slug if obj.category_id and getattr(obj.category, 'slug', None) else None
+
+    def get_category_name(self, obj):
+        return obj.category.name if obj.category_id and getattr(obj.category, 'name', None) else None
 
     def update(self, instance, validated_data):
         tag_ids = self.initial_data.get('tags')

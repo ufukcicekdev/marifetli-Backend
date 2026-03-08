@@ -216,12 +216,9 @@ class UserByUsernameView(generics.GenericAPIView):
         if request.user.is_authenticated and request.user != user:
             is_following = Follow.objects.filter(follower=request.user, following=user).exists()
 
-        # Kendi profili için sayıları Follow tablosundan hesapla (denormalize alan güncel olmasa bile doğru görünsün)
-        followers_count = user.followers_count
-        following_count = user.following_count
-        if request.user.is_authenticated and request.user.pk == user.pk:
-            followers_count = Follow.objects.filter(following=user).count()
-            following_count = Follow.objects.filter(follower=user).count()
+        # Takipçi / takip sayılarını her zaman Follow tablosundan hesapla (denormalize alan güncel olmasa bile doğru görünsün)
+        followers_count = Follow.objects.filter(following=user).count()
+        following_count = Follow.objects.filter(follower=user).count()
 
         data = {
             'id': user.id,
