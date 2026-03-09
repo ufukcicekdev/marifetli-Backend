@@ -25,6 +25,17 @@ class Comment(models.Model):
     )
     content = models.TextField()
     like_count = models.PositiveIntegerField(default=0)
+    MODERATION_STATUS_CHOICES = [
+        (0, 'Pending'),
+        (1, 'Approved'),
+        (2, 'Rejected'),
+        (3, 'Flagged'),
+    ]
+    moderation_status = models.PositiveSmallIntegerField(
+        choices=MODERATION_STATUS_CHOICES,
+        default=0,
+        db_index=True,
+    )
     is_deleted = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

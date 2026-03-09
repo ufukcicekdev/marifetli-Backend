@@ -38,6 +38,17 @@ class BlogComment(models.Model):
     post = models.ForeignKey(BlogPost, on_delete=models.CASCADE, related_name='comments')
     author = models.ForeignKey(User, on_delete=models.CASCADE, related_name='blog_comments')
     content = models.TextField()
+    MODERATION_STATUS_CHOICES = [
+        (0, 'Pending'),
+        (1, 'Approved'),
+        (2, 'Rejected'),
+        (3, 'Flagged'),
+    ]
+    moderation_status = models.PositiveSmallIntegerField(
+        choices=MODERATION_STATUS_CHOICES,
+        default=0,
+        db_index=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

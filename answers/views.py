@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
+from django.db.models import Q
 from django.contrib.auth import get_user_model
 from core.permissions import IsVerified
 from .models import Answer, AnswerLike, AnswerReport
@@ -26,40 +27,24 @@ class AnswerListView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         question_id = self.kwargs['question_id']
-        return Answer.objects.filter(question_id=question_id).select_related('author', 'parent')
+        qs = Answer.objects.filter(question_id=question_id, is_deleted=False).select_related('author', 'parent')
+        user = self.request.user
+        if user.is_authenticated and (user.is_staff or user.is_superuser):
+            return qs
+        if user.is_authenticated:
+            # Kullanıcı kendi cevaplarını ve onaylanmış cevapları görebilir
+            return qs.filter(Q(moderation_status=1) | Q(author=user) | Q(question__author=user))
+        # Anonim: sadece onaylanmış cevaplar
+        return qs.filter(moderation_status=1)
 
     def perform_create(self, serializer):
         question_id = self.kwargs['question_id']
         parent = serializer.validated_data.get('parent')
         if parent and parent.question_id != question_id:
             raise ValidationError({'parent': 'Parent answer must belong to this question.'})
-        content = (serializer.validated_data.get("content") or "")
-        from moderation.services import (
-            check_text_bad_words,
-            llm_moderate,
-            notify_user_moderation_removed,
-            save_suggested_bad_words,
-        )
-        has_bad, _ = check_text_bad_words(content)
-        if has_bad:
-            raise ValidationError(
-                {"detail": "Yorumunuzda uygun olmayan ifadeler tespit edildi. Lütfen metni düzenleyin."}
-            )
-        status, bad_words = llm_moderate(content)
-        if status == "RED":
-            save_suggested_bad_words(bad_words)
-            notify_user_moderation_removed(
-                self.request.user,
-                "Moderatör tarafından yorumunuz kaldırıldı. Kurallara aykırı içerik tespit edildi.",
-            )
-            raise ValidationError(
-                {"detail": "Yorumunuz moderasyon kurallarına aykırı bulundu ve yayına alınamadı. Bildirim gönderildi."}
-            )
-        answer = serializer.save(author=self.request.user, question_id=question_id, parent=parent)
-        from questions.models import Question
-        q = Question.objects.get(pk=question_id)
-        q.answer_count = q.answers.count()
-        q.save(update_fields=['answer_count'])
+        # Cevap önce moderation_status=0 (Pending) ile kaydedilir.
+        # BadWord + LLM kontrolleri cron/worker tarafından asenkron yapılır.
+        serializer.save(author=self.request.user, question_id=question_id, parent=parent)
 
 
 class UserAnswersListView(generics.ListAPIView):
@@ -80,7 +65,6 @@ class UserAnswersListView(generics.ListAPIView):
 
 
 class AnswerDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Answer.objects.all()
     serializer_class = AnswerSerializer
 
     def get_permissions(self):
@@ -88,10 +72,14 @@ class AnswerDetailView(generics.RetrieveUpdateDestroyAPIView):
             return [IsAuthenticated(), IsVerified()]
         return [IsAuthenticatedOrReadOnly()]
 
-    def get_object(self):
-        answer_id = self.kwargs['pk']
-        question_id = self.kwargs['question_id']
-        return Answer.objects.get(pk=answer_id, question_id=question_id)
+    def get_queryset(self):
+        qs = Answer.objects.filter(is_deleted=False)
+        user = self.request.user
+        if user.is_authenticated and (user.is_staff or user.is_superuser):
+            return qs
+        if user.is_authenticated:
+            return qs.filter(Q(moderation_status=1) | Q(author=user) | Q(question__author=user))
+        return qs.filter(moderation_status=1)
 
     def update(self, request, *args, **kwargs):
         answer = self.get_object()

@@ -7,6 +7,7 @@ from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.conf import settings
 from django.core.cache import cache
+from django.db.models import Q
 from django.contrib.auth import get_user_model
 from core.permissions import IsVerified
 from core.cache_utils import get_question_list_cache_key, invalidate_question_list
@@ -34,9 +35,12 @@ class QuestionListView(generics.ListCreateAPIView):
             .select_related('author', 'category')
             .prefetch_related('tags')
         )
-        if self.request.user.is_authenticated and self.request.query_params.get('author') == str(self.request.user.id):
-            return qs.filter(author=self.request.user)
-        return qs.exclude(status='draft')
+        user = self.request.user
+        # Kullanıcı kendi sorularını listeliyorsa tüm moderation_status değerlerini görebilir
+        if user.is_authenticated and self.request.query_params.get('author') == str(user.id):
+            return qs.filter(author=user)
+        # Genel liste: taslaklar hariç, sadece onaylanmış sorular
+        return qs.exclude(status='draft').filter(moderation_status=1)
 
     search_fields = ['title', 'description', 'content']
     ordering_fields = ['created_at', 'updated_at', 'like_count', 'answer_count', 'view_count', 'hot_score']
@@ -61,48 +65,32 @@ class QuestionListView(generics.ListCreateAPIView):
         return response
 
     def perform_create(self, serializer):
-        data = serializer.validated_data
-        text = " ".join(
-            str(s) for s in [
-                data.get("title") or "",
-                data.get("description") or "",
-                data.get("content") or "",
-            ]
-        )
-        from moderation.services import (
-            check_text_bad_words,
-            llm_moderate,
-            notify_user_moderation_removed,
-            save_suggested_bad_words,
-        )
-        has_bad, words = check_text_bad_words(text)
-        if has_bad:
-            raise ValidationError(
-                {"detail": "İçeriğinizde uygun olmayan ifadeler tespit edildi. Lütfen metni düzenleyin."}
-            )
-        status, bad_words = llm_moderate(text)
-        if status == "RED":
-            save_suggested_bad_words(bad_words)
-            notify_user_moderation_removed(
-                self.request.user,
-                "Moderatör tarafından içeriğiniz kaldırıldı. Kurallara aykırı içerik tespit edildi.",
-            )
-            raise ValidationError(
-                {"detail": "İçeriğiniz moderasyon kurallarına aykırı bulundu ve yayına alınamadı. Bildirim gönderildi."}
-            )
+        # Soru önce moderation_status=0 (Pending) ile kaydedilir.
+        # BadWord + LLM kontrolleri cron/worker tarafından asenkron yapılır.
         serializer.save(author=self.request.user)
         invalidate_question_list()
 
 
 class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Question.objects.select_related('author', 'category').prefetch_related('tags')
+    serializer_class = QuestionDetailSerializer
+    lookup_field = 'slug'
+
+    def get_queryset(self):
+        qs = Question.objects.select_related('author', 'category').prefetch_related('tags')
+        user = self.request.user
+        # Admin/staff her şeyi görebilir
+        if user.is_authenticated and (user.is_staff or user.is_superuser):
+            return qs
+        # Giriş yapmış kullanıcı: kendi soruları + onaylanmış sorular
+        if user.is_authenticated:
+            return qs.filter(Q(moderation_status=1) | Q(author=user))
+        # Anonim: sadece onaylanmış sorular
+        return qs.filter(moderation_status=1)
 
     def get_permissions(self):
         if self.request.method in ('PUT', 'PATCH', 'DELETE'):
             return [IsAuthenticated(), IsVerified()]
         return [IsAuthenticatedOrReadOnly()]
-    serializer_class = QuestionDetailSerializer
-    lookup_field = 'slug'
 
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()

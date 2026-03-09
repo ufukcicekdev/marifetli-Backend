@@ -57,6 +57,17 @@ class Question(models.Model):
     )
     tags = models.ManyToManyField(Tag, blank=True, related_name='questions')
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='open')
+    MODERATION_STATUS_CHOICES = [
+        (0, 'Pending'),
+        (1, 'Approved'),
+        (2, 'Rejected'),
+        (3, 'Flagged'),
+    ]
+    moderation_status = models.PositiveSmallIntegerField(
+        choices=MODERATION_STATUS_CHOICES,
+        default=0,
+        db_index=True,
+    )
     view_count = models.PositiveIntegerField(default=0)
     like_count = models.PositiveIntegerField(default=0)
     answer_count = models.PositiveIntegerField(default=0)

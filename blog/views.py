@@ -49,10 +49,17 @@ class BlogPostDetailView(generics.RetrieveAPIView):
     lookup_url_kwarg = 'slug'
 
     def get_queryset(self):
+        from django.db.models import Prefetch
+        from .models import BlogComment
+
+        approved_comments = Prefetch(
+            "comments",
+            queryset=BlogComment.objects.filter(moderation_status=1).select_related("author"),
+        )
         return (
             BlogPost.objects.filter(is_published=True)
             .select_related('author')
-            .prefetch_related('comments__author')
+            .prefetch_related(approved_comments)
         )
 
     def retrieve(self, request, *args, **kwargs):
@@ -78,9 +85,8 @@ class BlogCommentCreateView(generics.CreateAPIView):
         post = self.get_post()
         serializer = BlogCommentCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        # Blog yorumları da önce moderation_status=0 (Pending) ile kaydedilir.
         comment = serializer.save(post=post, author=request.user)
-        post.comment_count = post.comments.count()
-        post.save(update_fields=['comment_count'])
         from achievements.services import record_activity_and_check_streak
         record_activity_and_check_streak(request.user)
         out = BlogCommentSerializer(comment, context={'request': request})
