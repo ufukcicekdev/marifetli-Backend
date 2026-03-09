@@ -1,21 +1,51 @@
 # Moderasyon Yapısı – Soru ve Yorum İnceleme
 
-Bu dokümanda soru ve yorumları nasıl inceleyeceğinizi, **DB’ye ne zaman kaydettiğinizi** ve **görünürlüğü nasıl yönettiğinizi** (is_visible benzeri alan, kuyruk vb.) netleştiriyoruz.
+Bu dokümanda soru ve yorumları nasıl inceleyeceğinizi, **DB’ye ne zaman kaydettiğinizi** ve **görünürlüğü nasıl yönettiğinizi** (moderation_status, background task kuyruğu) netleştiriyoruz.
 
 ---
 
-## Şu anki akış (önceden red)
+## Uygulanan akış: Celery + Redis
 
-- Kullanıcı soru/yorum gönderir.
-- **BadWord** kontrolü → eşleşme varsa **kaydetmiyoruz**, 400 + mesaj.
-- **LLM** çağrısı → **RED** ise yine **kaydetmiyoruz**, bildirim + 400; **ONAY** ise **hemen kaydedip yayınlıyoruz**.
-- Yani: İnceleme “yayına almadan önce”; onaylanan içerik direkt görünür. Ayrı bir “beklemede” listesi yok.
+- Kullanıcı soru/cevap/blog yorumu gönderir → kayıt **hemen** DB’ye `moderation_status=0 (Pending)` ile yazılır.
+- Aynı istek içinde **Celery task** kuyruğa eklenir (`moderate_content_task.delay(...)`). İstek hemen 201/200 döner.
+- **Celery worker** Redis kuyruğundan task’ları alır; her task için:
+  1. **BadWord** kontrolü (DB’deki kötü kelime listesi). Eşleşme varsa → `moderation_status=2` (Rejected), kullanıcıya bildirim, biter (LLM’e gidilmez).
+  2. **LLM** çağrısı. RED → `moderation_status=2`, bildirim, `bad_words` SuggestedBadWord’e pending. ONAY → `moderation_status=1` (Approved), içerik sitede görünür.
 
-Bu yapıda **moderatör incelemesi** şu an sadece:
-- **SuggestedBadWord** (LLM’den dönen kelimeleri onaylamak/reddetmek),
-- İsterseniz **Report** (şikayet) kayıtları üzerinden “sonradan” inceleme
+Redis hem cache hem Celery broker olarak kullanılır (aynı REDIS_URL).
 
-ile yapılıyor.
+### Railway’de worker (Celery otomatik başlamaz)
+
+**railway.json** sadece ana backend (web) servisi için. Celery ayrı process olduğu için **ek bir servis** tanımlaman gerekir; sunucuya atınca sadece web çalışır, worker çalışmaz.
+
+1. Railway Dashboard → Aynı projede **yeni servis** oluştur (Add Service).
+2. **GitHub Repo** ile eklediysen: aynı repoyu seç, **Root Directory** backend klasörüne işaretlesin (örn. `marifetli/backend` veya proje yapına göre).
+3. **Variables:** Backend ile aynı env’leri ver: `REDIS_URL`, `DATABASE_URL`, `SECRET_KEY`, `MODERATION_LLM_URL`, `MODERATION_LLM_PROMPT` (ve gereken diğerleri).
+4. **Settings → Deploy:** Start Command’ı şu yap:
+   ```bash
+   celery -A marifetli_project worker -l info
+   ```
+5. Build komutu backend ile aynı olsun (Dockerfile varsa aynı Dockerfile, değilse `pip install -r requirements.txt` vb.). Deploy’dan sonra bu servis sürekli açık kalır ve kuyruktan moderasyon task’larını işler.
+
+**Özet:** `railway.json`’a ekleme yapmana gerek yok. Ana backend `start.sh` (gunicorn) ile çalışmaya devam eder. Celery için ayrı bir **Worker** servisi ekleyip start command’ı `celery -A marifetli_project worker -l info` yapman yeterli.
+
+### Fallback: toplu komut
+
+- Task’lar bir şekilde işlenmezse (worker kapalı vb.) bekleyen kayıtları toplu işlemek için:
+  `python manage.py moderate_pending_content --limit 100`
+
+### Loglama (DB’ye yazılmaz)
+
+- **Celery worker** çalışırken: `cronjobs.tasks` → `Moderation task received: model=..., pk=...` (task alındı).
+- **LLM çağrısı:** `moderation.services` → `Calling LLM moderation API: url=... payload_len=...` (istek atılmadan önce), sonra `LLM moderation result: status=... bad_words=...` (cevap alındıktan sonra).
+- Bu loglar **Python logging** ile yazılır; konsola (veya `settings.LOGGING` ile yapılandırılmışsa dosyaya) gider. Veritabanına kayıt yapılmaz. Railway’de servis loglarında görürsün.
+
+---
+
+## Moderatör incelemesi
+
+- **SuggestedBadWord:** LLM’den dönen kelimeler admin’de onaylanır/reddedilir.
+- **Report:** Şikayet edilen içerikler sonradan inceleme için kullanılabilir.
 
 ---
 

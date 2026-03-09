@@ -11,8 +11,10 @@ Soru ve yorum gönderiminde metin önce **kötü kelime listesine** (DB: `modera
 
 ## 2. LLM servisi (status + bad_words)
 
-- Varsayılan URL: `https://marifetli-moderator-production.up.railway.app/moderate`
-- **İstek:** `POST`, JSON body: `{"text": "kontrol edilecek metin"}` (en fazla 10000 karakter).
+- URL: `MODERATION_LLM_URL` (env) ile verilir; örnek: `https://marifetli-moderator-production.up.railway.app/moderate`
+- **Prompt:** `MODERATION_LLM_PROMPT` (env) ile verilir. Varsayılan: *"Sen marifetli.com.tr topluluk moderatörüsün. Sana gelen metinleri sadece küfür, hakaret, cinsellik ve siyasi tartışma açısından incele. Eğer uygunsuzsa sadece 'RED' yaz. Eğer içerik temizse sadece 'ONAY' yaz. Başka hiçbir açıklama yapma."*  
+  Backend bu talimatı metnin başına ekleyerek gönderir: `{"text": "<prompt>\n\nMetin:\n<kullanıcı metni>"}` (en fazla 10000 karakter kullanıcı metni).
+- **İstek:** `POST`, JSON body: `{"text": "..."}` (prompt + Metin: + kullanıcı metni).
 - **Cevap:** `{"status": "ONAY"}` veya `{"status": "RED", "bad_words": ["kelime1", "kelime2", ...]}`.
   - **ONAY:** İçerik kaydedilir.
   - **RED:** İçerik kaydedilmez, kullanıcıya bildirim gider; `bad_words` listesi **doğrudan BadWord’e eklenmez**, admin onayı için **SuggestedBadWord** tablosuna **pending** olarak yazılır (ör. "makrome" el işi adı olarak dönmüş olabilir, küfür değildir).

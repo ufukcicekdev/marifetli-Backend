@@ -1,3 +1,6 @@
+import logging
+import threading
+
 from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAuthenticatedOrReadOnly
@@ -10,6 +13,7 @@ from .models import Answer, AnswerLike, AnswerReport
 from .serializers import AnswerSerializer, AnswerCreateSerializer, AnswerLikeSerializer, AnswerReportSerializer
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 class AnswerListView(generics.ListCreateAPIView):
@@ -32,8 +36,11 @@ class AnswerListView(generics.ListCreateAPIView):
         if user.is_authenticated and (user.is_staff or user.is_superuser):
             return qs
         if user.is_authenticated:
-            # Kullanıcı kendi cevaplarını ve onaylanmış cevapları görebilir
-            return qs.filter(Q(moderation_status=1) | Q(author=user) | Q(question__author=user))
+            # Onaylanmış cevaplar; yazar/soru sahibi kendi cevaplarını sadece onaylı veya beklemede görür, reddedilen (2) hiç kimseye gösterilmez
+            return qs.filter(
+                Q(moderation_status=1)
+                | ((Q(author=user) | Q(question__author=user)) & ~Q(moderation_status=2))
+            )
         # Anonim: sadece onaylanmış cevaplar
         return qs.filter(moderation_status=1)
 
@@ -43,8 +50,18 @@ class AnswerListView(generics.ListCreateAPIView):
         if parent and parent.question_id != question_id:
             raise ValidationError({'parent': 'Parent answer must belong to this question.'})
         # Cevap önce moderation_status=0 (Pending) ile kaydedilir.
-        # BadWord + LLM kontrolleri cron/worker tarafından asenkron yapılır.
-        serializer.save(author=self.request.user, question_id=question_id, parent=parent)
+        # Task'ı thread'de kuyruğa atıyoruz ki HTTP yanıtı hemen dönsün; istemci timeout olmasın.
+        instance = serializer.save(author=self.request.user, question_id=question_id, parent=parent)
+        pk, model_label = instance.pk, "answers.Answer"
+
+        def enqueue():
+            try:
+                from cronjobs.tasks import moderate_content_task
+                moderate_content_task.delay(model_label, pk)
+            except Exception as e:
+                logger.warning("Moderation task enqueue failed (answer %s), content saved as pending: %s", pk, e)
+
+        threading.Thread(target=enqueue, daemon=True).start()
 
 
 class UserAnswersListView(generics.ListAPIView):
@@ -57,9 +74,11 @@ class UserAnswersListView(generics.ListAPIView):
 
     def get_queryset(self):
         user_id = self.kwargs['user_id']
+        # Reddedilen (2) cevaplar profilde de gösterilmez
         return (
             Answer.objects
             .filter(author_id=user_id, is_deleted=False)
+            .exclude(moderation_status=2)
             .select_related('author', 'question')
         )
 
@@ -78,7 +97,10 @@ class AnswerDetailView(generics.RetrieveUpdateDestroyAPIView):
         if user.is_authenticated and (user.is_staff or user.is_superuser):
             return qs
         if user.is_authenticated:
-            return qs.filter(Q(moderation_status=1) | Q(author=user) | Q(question__author=user))
+            return qs.filter(
+                Q(moderation_status=1)
+                | ((Q(author=user) | Q(question__author=user)) & ~Q(moderation_status=2))
+            )
         return qs.filter(moderation_status=1)
 
     def update(self, request, *args, **kwargs):

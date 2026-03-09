@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     "emails",
     "blog",
     "communities",
+    "logs",
 ]
 
 MIDDLEWARE = [
@@ -406,5 +407,56 @@ CACHE_TTL_QUESTION_DETAIL = config("CACHE_TTL_QUESTION_DETAIL", default=30, cast
 # config'ten (env) verilmezse boş; boşsa LLM çağrısı yapılmaz.
 MODERATION_LLM_URL = config("MODERATION_LLM_URL", default="").strip()
 MODERATION_LLM_TIMEOUT = config("MODERATION_LLM_TIMEOUT", default=10, cast=int)
-# Bildirimlerde "moderatör" olarak kullanılacak sistem kullanıcı kullanıcı adı (yoksa ilk superuser)
-MODERATOR_SYSTEM_USERNAME = config("MODERATOR_SYSTEM_USERNAME", default="system_moderator")
+# LLM'e gönderilecek talimat (prompt). Boşsa sadece kullanıcı metni gider. Varsa metin "Metin: ..." ile eklenir.
+MODERATION_LLM_PROMPT = config(
+    "MODERATION_LLM_PROMPT",
+    default="Sen marifetli.com.tr topluluk moderatörüsün. Sana gelen metinleri sadece küfür, hakaret, cinsellik ve siyasi tartışma açısından incele. Eğer uygunsuzsa sadece 'RED' yaz. Eğer içerik temizse sadece 'ONAY' yaz. Başka hiçbir açıklama yapma.",
+).strip()
+# Celery - background task kuyruğu (Redis broker). REDIS_URL varsa aynı Redis kullanılır.
+CELERY_BROKER_URL = config("CELERY_BROKER_URL", default=REDIS_URL or "")
+CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default=CELERY_BROKER_URL)
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_TIMEZONE = "Europe/Istanbul"
+
+# Loglama: varsayılan konsola gider; LOG_DIR verilirse dosyaya; logs app ile DB'ye yazılır.
+LOG_DIR = config("LOG_DIR", default="")
+LOG_TO_DB = config("LOG_TO_DB", default=True, cast=bool)  # False ile DB'ye yazmayı kapat
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {"format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s"},
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+    "root": {"handlers": ["console"], "level": "INFO"},
+    "loggers": {
+        "moderation": {"level": "INFO", "handlers": ["console"], "propagate": False},
+        "cronjobs": {"level": "INFO", "handlers": ["console"], "propagate": False},
+    },
+}
+if LOG_DIR:
+    Path(LOG_DIR).mkdir(parents=True, exist_ok=True)
+    LOGGING["handlers"]["file"] = {
+        "class": "logging.FileHandler",
+        "filename": Path(LOG_DIR) / "django.log",
+        "formatter": "verbose",
+    }
+    LOGGING["root"]["handlers"].append("file")
+    for name in ("moderation", "cronjobs"):
+        if "file" not in LOGGING["loggers"][name]["handlers"]:
+            LOGGING["loggers"][name]["handlers"].append("file")
+if LOG_TO_DB:
+    LOGGING["handlers"]["db"] = {
+        "()": "logs.handlers.DatabaseLogHandler",
+        "formatter": "verbose",
+        "source": "",
+    }
+    for name in ("moderation", "cronjobs"):
+        if "db" not in LOGGING["loggers"][name]["handlers"]:
+            LOGGING["loggers"][name]["handlers"].append("db")

@@ -1,3 +1,5 @@
+from django.conf import settings
+from django.core.cache import cache
 from django.db import ProgrammingError
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -82,3 +84,26 @@ def submit_contact_message(request):
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     return Response({'detail': 'Mesajınız alındı, en kısa sürede size dönüş yapacağız.'}, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def cache_status(request):
+    """
+    Cache (Redis) kullanımını kontrol eder. Redis kullanılıyorsa ve erişilebiliyorsa ping_ok: true döner.
+    GET /api/settings/cache-status/ veya /api/cache-status/
+    """
+    backend = settings.CACHES.get('default', {}).get('BACKEND', '')
+    redis_used = 'redis' in backend.lower()
+    ping_ok = False
+    if redis_used:
+        try:
+            cache.set('_health_check', 1, timeout=5)
+            ping_ok = cache.get('_health_check') == 1
+        except Exception:
+            pass
+    return Response({
+        'backend': backend.split('.')[-1] if backend else 'unknown',
+        'redis_used': redis_used,
+        'ping_ok': ping_ok,
+    })

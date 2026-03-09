@@ -1,3 +1,6 @@
+import logging
+import threading
+
 from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAuthenticatedOrReadOnly
@@ -16,6 +19,7 @@ from .serializers import QuestionListSerializer, QuestionDetailSerializer, Quest
 from answers.serializers import AnswerSerializer
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 class QuestionListView(generics.ListCreateAPIView):
@@ -36,9 +40,9 @@ class QuestionListView(generics.ListCreateAPIView):
             .prefetch_related('tags')
         )
         user = self.request.user
-        # Kullanıcı kendi sorularını listeliyorsa tüm moderation_status değerlerini görebilir
+        # Kullanıcı kendi sorularını listeliyorsa sadece onaylı veya beklemede olanları görür; reddedilen (2) gösterilmez
         if user.is_authenticated and self.request.query_params.get('author') == str(user.id):
-            return qs.filter(author=user)
+            return qs.filter(author=user).exclude(moderation_status=2)
         # Genel liste: taslaklar hariç, sadece onaylanmış sorular
         return qs.exclude(status='draft').filter(moderation_status=1)
 
@@ -66,9 +70,19 @@ class QuestionListView(generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         # Soru önce moderation_status=0 (Pending) ile kaydedilir.
-        # BadWord + LLM kontrolleri cron/worker tarafından asenkron yapılır.
-        serializer.save(author=self.request.user)
+        # Task'ı thread'de kuyruğa atıyoruz ki HTTP yanıtı hemen dönsün.
+        instance = serializer.save(author=self.request.user)
         invalidate_question_list()
+        pk, model_label = instance.pk, "questions.Question"
+
+        def enqueue():
+            try:
+                from cronjobs.tasks import moderate_content_task
+                moderate_content_task.delay(model_label, pk)
+            except Exception as e:
+                logger.warning("Moderation task enqueue failed (question %s), content saved as pending: %s", pk, e)
+
+        threading.Thread(target=enqueue, daemon=True).start()
 
 
 class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -81,9 +95,9 @@ class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
         # Admin/staff her şeyi görebilir
         if user.is_authenticated and (user.is_staff or user.is_superuser):
             return qs
-        # Giriş yapmış kullanıcı: kendi soruları + onaylanmış sorular
+        # Giriş yapmış kullanıcı: onaylanmış sorular; kendi sorusu ise reddedilmemiş (0 veya 1) olanları görür
         if user.is_authenticated:
-            return qs.filter(Q(moderation_status=1) | Q(author=user))
+            return qs.filter(Q(moderation_status=1) | (Q(author=user) & ~Q(moderation_status=2)))
         # Anonim: sadece onaylanmış sorular
         return qs.filter(moderation_status=1)
 

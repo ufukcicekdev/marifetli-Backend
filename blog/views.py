@@ -1,3 +1,6 @@
+import logging
+import threading
+
 from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAuthenticatedOrReadOnly
@@ -5,6 +8,8 @@ from rest_framework.response import Response
 from django.utils import timezone
 
 from core.permissions import IsVerified
+
+logger = logging.getLogger(__name__)
 from .models import BlogPost, BlogComment, BlogLike
 from .serializers import (
     BlogPostListSerializer,
@@ -89,6 +94,16 @@ class BlogCommentCreateView(generics.CreateAPIView):
         comment = serializer.save(post=post, author=request.user)
         from achievements.services import record_activity_and_check_streak
         record_activity_and_check_streak(request.user)
+        pk, model_label = comment.pk, "blog.BlogComment"
+
+        def enqueue():
+            try:
+                from cronjobs.tasks import moderate_content_task
+                moderate_content_task.delay(model_label, pk)
+            except Exception as e:
+                logger.warning("Moderation task enqueue failed (blog comment %s), content saved as pending: %s", pk, e)
+
+        threading.Thread(target=enqueue, daemon=True).start()
         out = BlogCommentSerializer(comment, context={'request': request})
         return Response(out.data, status=status.HTTP_201_CREATED)
 

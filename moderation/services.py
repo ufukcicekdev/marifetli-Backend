@@ -63,18 +63,32 @@ def check_text_bad_words(text):
 def llm_moderate(text):
     """
     Harici LLM moderasyon servisine metni gönderir.
+
+    Kullanıcı yorumu/sorusu nereye gidiyor?
+    - API'ye tek bir "text" alanı ile POST atıyoruz.
+    - Gönderilen metin: (MODERATION_LLM_PROMPT) + "\\n\\nMetin:\\n" + (kullanıcının yazdığı metin).
+    - Yani LLM hem talimatı hem de "Metin:" başlığı altında kullanıcı içeriğini görüyor.
+
     API: POST { "text": "..." } -> { "status": "ONAY"|"RED", "bad_words": ["..."] }
     Returns: tuple[str, list[str]] -> ('ONAY', []) veya ('RED', ['word1', 'word2', ...])
     Servis yoksa veya hata olursa ('ONAY', []) döner.
     """
     url = getattr(settings, "MODERATION_LLM_URL", "").strip()
     if not url:
+        logger.info("LLM moderation skipped: MODERATION_LLM_URL not set (env), defaulting to ONAY")
         return "ONAY", []
     timeout = getattr(settings, "MODERATION_LLM_TIMEOUT", 10)
+    prompt = getattr(settings, "MODERATION_LLM_PROMPT", "").strip()
+    user_text = (text or "")[:10000]
+    if prompt:
+        payload_text = f"{prompt}\n\nMetin:\n{user_text}"
+    else:
+        payload_text = user_text
+    logger.info("Calling LLM moderation API: url=%s payload_len=%s", url, len(payload_text))
     try:
         r = requests.post(
             url,
-            json={"text": (text or "")[:10000]},
+            json={"text": payload_text},
             timeout=timeout,
             headers={"Content-Type": "application/json"},
         )
@@ -85,12 +99,51 @@ def llm_moderate(text):
         if not isinstance(bad_words, list):
             bad_words = []
         bad_words = [str(w).strip().lower() for w in bad_words if w and str(w).strip()]
+        logger.info("LLM moderation result: status=%s, bad_words=%s", status, bad_words)
         if status == "RED":
             return "RED", bad_words
         return "ONAY", []
     except Exception as e:
         logger.warning("LLM moderation request failed: %s", e)
         return "ONAY", []
+
+
+def run_moderation(obj, text, rejected_message, on_approved=None, on_rejected=None):
+    """
+    Tek bir içerik nesnesi için BadWord + LLM moderasyonu çalıştırır.
+    obj.moderation_status ve obj.author kullanır; on_approved/on_rejected callback'leri opsiyonel.
+    """
+    text = (text or "").strip()
+    if not text:
+        obj.moderation_status = 1
+        obj.save(update_fields=["moderation_status"])
+        if on_approved:
+            on_approved(obj)
+        return
+
+    has_bad, words_found = check_text_bad_words(text)
+    if has_bad:
+        logger.info("Moderation: rejected by BadWord list (LLM not called), words=%s", words_found)
+        obj.moderation_status = 2
+        obj.save(update_fields=["moderation_status"])
+        notify_user_moderation_removed(obj.author, rejected_message)
+        if on_rejected:
+            on_rejected(obj)
+        return
+
+    status, bad_words = llm_moderate(text)
+    if status == "RED":
+        save_suggested_bad_words(bad_words)
+        obj.moderation_status = 2
+        obj.save(update_fields=["moderation_status"])
+        notify_user_moderation_removed(obj.author, rejected_message)
+        if on_rejected:
+            on_rejected(obj)
+    else:
+        obj.moderation_status = 1
+        obj.save(update_fields=["moderation_status"])
+        if on_approved:
+            on_approved(obj)
 
 
 def save_suggested_bad_words(bad_words):
@@ -111,31 +164,19 @@ def save_suggested_bad_words(bad_words):
         SuggestedBadWord.objects.create(word=w, status="pending", source="llm")
 
 
-def get_moderator_system_user():
-    """Bildirimlerde 'moderatör' olarak kullanılacak sistem kullanıcısı."""
-    username = getattr(settings, "MODERATOR_SYSTEM_USERNAME", "system_moderator")
-    user, _ = User.objects.get_or_create(
-        username=username,
-        defaults={"is_active": True, "is_staff": False, "is_superuser": False},
-    )
-    return user
-
-
 def notify_user_moderation_removed(user, message):
     """
     Kullanıcıya "Moderatör tarafından içeriğiniz kaldırıldı / engellendi" bildirimi gönderir.
+    Gönderen olarak sistem kullanıcısı kullanılmaz; sender=None ile kaydedilir (sistem bildirimi).
     """
     try:
         from notifications.services import create_notification
     except ImportError:
         return
-    sender = get_moderator_system_user()
-    if user.pk == sender.pk:
-        return
     try:
         create_notification(
             recipient=user,
-            sender=sender,
+            sender=None,
             notification_type="moderation_removed",
             message=message,
         )

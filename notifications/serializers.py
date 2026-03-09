@@ -8,7 +8,7 @@ User = get_user_model()
 
 class NotificationSerializer(serializers.ModelSerializer):
     recipient = UserSerializer(read_only=True)
-    sender = UserSerializer(read_only=True)
+    sender = UserSerializer(read_only=True, allow_null=True)
     question_slug = serializers.SerializerMethodField()
 
     class Meta:

@@ -20,9 +20,9 @@ def _should_send(recipient, setting_key: str) -> bool:
 def create_notification(recipient, sender, notification_type: str, message: str, *, question=None, answer=None):
     """
     Bir bildirim kaydı oluşturur. İsteğe bağlı e-posta ve push gönderir.
-    recipient/sender: User; notification_type: Notification.NOTIFICATION_TYPES içinden.
+    recipient: User; sender: User veya None (sistem bildirimi, örn. moderasyon).
     """
-    if recipient.pk == sender.pk:
+    if sender is not None and recipient.pk == sender.pk:
         return None
     notif = Notification.objects.create(
         recipient=recipient,
