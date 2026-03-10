@@ -7,9 +7,12 @@ ROLE=${CELERY_WORKER:-0}  # 1 ise worker, aksi halde web
 echo "[start.sh] PORT=$PORT ROLE=$ROLE"
 
 if [ "$ROLE" = "1" ]; then
-  echo "[start.sh] Starting Celery worker..."
-  # Worker için migrate zorunlu değil; DB şeması web deploy'unda güncellenmiş olmalı.
+  echo "[start.sh] Starting healthcheck HTTP server + Celery worker..."
+  # Sadece healthcheck için çok hafif HTTP server (PORT üzerinde 200 döner)
+  python -m http.server "$PORT" &
+  # Asıl iş yapan Celery worker
   exec celery -A marifetli_project worker -l info
+  
 else
   echo "[start.sh] Running migrate..."
   python manage.py migrate --noinput
