@@ -109,6 +109,22 @@ class AnswerDetailView(generics.RetrieveUpdateDestroyAPIView):
             return Response({'error': 'You can only edit your own answers'}, status=status.HTTP_403_FORBIDDEN)
         return super().update(request, *args, **kwargs)
 
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        # Düzenleme sonrası tekrar moderasyona gönder
+        instance.moderation_status = 0
+        instance.save(update_fields=["moderation_status"])
+        pk, model_label = instance.pk, "answers.Answer"
+
+        def enqueue():
+            try:
+                from cronjobs.tasks import moderate_content_task
+                moderate_content_task.delay(model_label, pk)
+            except Exception as e:
+                logger.warning("Moderation task enqueue failed (answer %s) after edit: %s", pk, e)
+
+        threading.Thread(target=enqueue, daemon=True).start()
+
     def destroy(self, request, *args, **kwargs):
         answer = self.get_object()
         if answer.author != request.user:

@@ -8,6 +8,7 @@ Bu dokümanda soru ve yorumları nasıl inceleyeceğinizi, **DB’ye ne zaman ka
 
 - Kullanıcı soru/cevap/blog yorumu gönderir → kayıt **hemen** DB’ye `moderation_status=0 (Pending)` ile yazılır.
 - Aynı istek içinde **Celery task** kuyruğa eklenir (`moderate_content_task.delay(...)`). İstek hemen 201/200 döner.
+- **Düzenleme:** Kullanıcı soru veya cevabı düzenlerse (`PUT`/`PATCH`) kayıt yine `moderation_status=0` yapılır ve aynı task tekrar kuyruğa alınır; güncel metin tekrar BadWord + LLM ile kontrol edilir. (Blog yorumu için API’de düzenleme endpoint’i yok.)
 - **Celery worker** Redis kuyruğundan task’ları alır; her task için:
   1. **BadWord** kontrolü (DB’deki kötü kelime listesi). Eşleşme varsa → `moderation_status=2` (Rejected), kullanıcıya bildirim, biter (LLM’e gidilmez).
   2. **LLM** çağrısı. RED → `moderation_status=2`, bildirim, `bad_words` SuggestedBadWord’e pending. ONAY → `moderation_status=1` (Approved), içerik sitede görünür.

@@ -124,8 +124,21 @@ class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
         return Response(serializer.data)
 
     def perform_update(self, serializer):
-        serializer.save()
+        instance = serializer.save()
         invalidate_question_list()
+        # Düzenleme sonrası tekrar moderasyona gönder
+        instance.moderation_status = 0
+        instance.save(update_fields=["moderation_status"])
+        pk, model_label = instance.pk, "questions.Question"
+
+        def enqueue():
+            try:
+                from cronjobs.tasks import moderate_content_task
+                moderate_content_task.delay(model_label, pk)
+            except Exception as e:
+                logger.warning("Moderation task enqueue failed (question %s) after edit: %s", pk, e)
+
+        threading.Thread(target=enqueue, daemon=True).start()
 
     def perform_destroy(self, instance):
         instance.delete()
