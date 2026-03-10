@@ -16,18 +16,40 @@ Redis hem cache hem Celery broker olarak kullanılır (aynı REDIS_URL).
 
 ### Railway’de worker (Celery otomatik başlamaz)
 
-**railway.json** sadece ana backend (web) servisi için. Celery ayrı process olduğu için **ek bir servis** tanımlaman gerekir; sunucuya atınca sadece web çalışır, worker çalışmaz.
+**railway.json** hem web hem worker servisleri için aynı `start.sh`’i çalıştırabilir; hangi rolün çalışacağını **env değişkeni** belirler.
 
-1. Railway Dashboard → Aynı projede **yeni servis** oluştur (Add Service).
-2. **GitHub Repo** ile eklediysen: aynı repoyu seç, **Root Directory** backend klasörüne işaretlesin (örn. `marifetli/backend` veya proje yapına göre).
-3. **Variables:** Backend ile aynı env’leri ver: `REDIS_URL`, `DATABASE_URL`, `SECRET_KEY`, `MODERATION_LLM_URL`, `MODERATION_LLM_PROMPT` (ve gereken diğerleri).
-4. **Settings → Deploy:** Start Command’ı şu yap:
-   ```bash
-   celery -A marifetli_project worker -l info
-   ```
-5. Build komutu backend ile aynı olsun (Dockerfile varsa aynı Dockerfile, değilse `pip install -r requirements.txt` vb.). Deploy’dan sonra bu servis sürekli açık kalır ve kuyruktan moderasyon task’larını işler.
+#### Servis yapısı
 
-**Özet:** `railway.json`’a ekleme yapmana gerek yok. Ana backend `start.sh` (gunicorn) ile çalışmaya devam eder. Celery için ayrı bir **Worker** servisi ekleyip start command’ı `celery -A marifetli_project worker -l info` yapman yeterli.
+- **Backend (web) servisi:** Normal API / admin’i sunar.
+- **Worker servisi:** Sadece Celery worker çalıştırır.
+
+Her ikisi de aynı repo ve aynı `start.sh` dosyasını kullanır. `start.sh` içinde:
+
+```bash
+ROLE=${CELERY_WORKER:-0}  # 1 ise worker, aksi halde web
+if [ "$ROLE" = "1" ]; then
+  # Celery worker
+  exec celery -A marifetli_project worker -l info
+else
+  # Web (gunicorn) + migrate
+  python manage.py migrate --noinput
+  exec gunicorn marifetli_project.wsgi:application --bind "0.0.0.0:$PORT" --workers 3 --timeout 120
+fi
+```
+
+#### Adımlar
+
+1. Railway Dashboard → Aynı projede **yeni servis** oluştur (Add Service) ve **aynı GitHub reposunu** seç (backend ile aynı).
+2. Her iki serviste de **Start Command**: `sh start.sh` kalsın (override etmen gerekmiyor).
+3. **Backend (web) servisi Variables:**
+   - `CELERY_WORKER=0` **ya da hiç tanımlama** (varsayılan 0).
+4. **Worker servisi Variables:**
+   - `CELERY_WORKER=1` (bu servis Celery worker olarak çalışacak).
+   - Backend ile aynı env’leri ver: `REDIS_URL`, `DATABASE_URL`, `SECRET_KEY`, `MODERATION_LLM_URL`, `MODERATION_LLM_PROMPT` vb.
+
+Bu yapıda:
+- Web servisi `start.sh` ile migrate + gunicorn çalıştırır.
+- Worker servisi aynı `start.sh` ile Celery worker’ı çalıştırır (migrate yapmadan, sadece worker).
 
 ### Fallback: toplu komut
 
