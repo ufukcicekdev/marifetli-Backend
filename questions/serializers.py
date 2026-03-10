@@ -1,6 +1,8 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import Tag, Question, QuestionLike, QuestionView, QuestionReport
+from answers.models import Answer
+from answers.serializers import AnswerSerializer
 from users.serializers import UserSerializer
 
 User = get_user_model()
@@ -28,6 +30,7 @@ class QuestionDetailSerializer(serializers.ModelSerializer):
     tags = TagSerializer(many=True, read_only=True)
     category_slug = serializers.SerializerMethodField()
     category_name = serializers.SerializerMethodField()
+    answers = serializers.SerializerMethodField()
 
     class Meta:
         model = Question
@@ -37,6 +40,7 @@ class QuestionDetailSerializer(serializers.ModelSerializer):
             'is_deleted', 'deleted_at', 'hot_score', 'meta_title', 'meta_description',
             'best_answer', 'created_at', 'updated_at',
             'category_slug', 'category_name',
+            'answers',
         ]
 
     def get_category_slug(self, obj):
@@ -44,6 +48,20 @@ class QuestionDetailSerializer(serializers.ModelSerializer):
 
     def get_category_name(self, obj):
         return obj.category.name if obj.category_id and getattr(obj.category, 'name', None) else None
+
+    def get_answers(self, obj):
+        """
+        Soru detayında gösterilecek cevaplar:
+        - Silinmemiş
+        - Moderasyon durumu reddedilmemiş (2 olmayanlar)
+        """
+        qs = (
+            Answer.objects
+            .filter(question=obj, is_deleted=False)
+            .exclude(moderation_status=2)
+            .select_related('author', 'parent')
+        )
+        return AnswerSerializer(qs, many=True, context=self.context).data
 
     def update(self, instance, validated_data):
         tag_ids = self.initial_data.get('tags')
