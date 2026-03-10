@@ -114,6 +114,12 @@ def run_moderation(obj, text, rejected_message, on_approved=None, on_rejected=No
     obj.moderation_status ve obj.author kullanır; on_approved/on_rejected callback'leri opsiyonel.
     """
     text = (text or "").strip()
+    logger.info(
+        "Moderation started for obj=%s(pk=%s) text_preview=%s",
+        obj.__class__.__name__,
+        getattr(obj, "pk", None),
+        (text or "")[:200],
+    )
     if not text:
         obj.moderation_status = 1
         obj.save(update_fields=["moderation_status"])
@@ -123,7 +129,12 @@ def run_moderation(obj, text, rejected_message, on_approved=None, on_rejected=No
 
     has_bad, words_found = check_text_bad_words(text)
     if has_bad:
-        logger.info("Moderation: rejected by BadWord list (LLM not called), words=%s", words_found)
+        logger.info(
+            "Moderation decision=REJECT source=bad_words obj=%s(pk=%s) words=%s",
+            obj.__class__.__name__,
+            getattr(obj, "pk", None),
+            words_found,
+        )
         obj.moderation_status = 2
         obj.save(update_fields=["moderation_status"])
         notify_user_moderation_removed(obj.author, rejected_message)
@@ -133,6 +144,12 @@ def run_moderation(obj, text, rejected_message, on_approved=None, on_rejected=No
 
     status, bad_words = llm_moderate(text)
     if status == "RED":
+        logger.info(
+            "Moderation decision=REJECT source=llm obj=%s(pk=%s) bad_words=%s",
+            obj.__class__.__name__,
+            getattr(obj, "pk", None),
+            bad_words,
+        )
         save_suggested_bad_words(bad_words)
         obj.moderation_status = 2
         obj.save(update_fields=["moderation_status"])
@@ -140,6 +157,11 @@ def run_moderation(obj, text, rejected_message, on_approved=None, on_rejected=No
         if on_rejected:
             on_rejected(obj)
     else:
+        logger.info(
+            "Moderation decision=APPROVE source=llm obj=%s(pk=%s)",
+            obj.__class__.__name__,
+            getattr(obj, "pk", None),
+        )
         obj.moderation_status = 1
         obj.save(update_fields=["moderation_status"])
         if on_approved:

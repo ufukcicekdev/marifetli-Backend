@@ -41,11 +41,20 @@ def moderate_content_task(model_label, pk):
         pd = getattr(obj, "pending_description", "") or ""
         pc = getattr(obj, "pending_content", "") or ""
         if pt or pd or pc:
+            text_source = "pending"
             text = " ".join(str(s) for s in [pt, pd, pc])
         else:
+            text_source = "live"
             text = " ".join(
                 str(s) for s in [getattr(obj, "title", "") or "", getattr(obj, "description", "") or "", getattr(obj, "content", "") or ""]
             )
+        logger.info(
+            "Moderation question text prepared: model=%s pk=%s source=%s preview=%s",
+            model_label,
+            pk,
+            text_source,
+            (text or "")[:200],
+        )
 
         def question_apply_pending(q):
             if getattr(q, "pending_title", None) or getattr(q, "pending_description", None) or getattr(q, "pending_content", None):
@@ -73,7 +82,20 @@ def moderate_content_task(model_label, pk):
         )
 
     elif model_label == "answers.Answer":
-        text = (getattr(obj, "pending_content", None) or "").strip() or (getattr(obj, "content", "") or "")
+        pending_text = (getattr(obj, "pending_content", None) or "").strip()
+        if pending_text:
+            text_source = "pending"
+            text = pending_text
+        else:
+            text_source = "live"
+            text = getattr(obj, "content", "") or ""
+        logger.info(
+            "Moderation answer text prepared: model=%s pk=%s source=%s preview=%s",
+            model_label,
+            pk,
+            text_source,
+            (text or "")[:200],
+        )
 
         def update_answer_count(answer_obj):
             from questions.models import Question
