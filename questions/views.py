@@ -124,11 +124,21 @@ class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
         return Response(serializer.data)
 
     def perform_update(self, serializer):
+        instance = self.get_object()
+        old_title = instance.title
+        old_description = instance.description
+        old_content = instance.content or ""
         instance = serializer.save()
         invalidate_question_list()
-        # Düzenleme sonrası tekrar moderasyona gönder
+        # Yeni metni pending'e yaz; canlıda eski hali kalsın; reddedilirse eski hali kalır
+        instance.pending_title = instance.title
+        instance.pending_description = instance.description
+        instance.pending_content = instance.content or ""
+        instance.title = old_title
+        instance.description = old_description
+        instance.content = old_content
         instance.moderation_status = 0
-        instance.save(update_fields=["moderation_status"])
+        instance.save(update_fields=["pending_title", "pending_description", "pending_content", "title", "description", "content", "moderation_status"])
         pk, model_label = instance.pk, "questions.Question"
 
         def enqueue():

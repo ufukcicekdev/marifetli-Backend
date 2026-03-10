@@ -47,6 +47,9 @@ class Question(models.Model):
     slug = models.SlugField(max_length=250, unique=True, blank=True)
     description = models.TextField()  # Plain text fallback
     content = models.TextField(blank=True)  # Rich text (HTML/Markdown)
+    pending_title = models.CharField(max_length=200, blank=True)
+    pending_description = models.TextField(blank=True)
+    pending_content = models.TextField(blank=True, help_text="Düzenleme sonrası moderasyona giden metin; onaylanırsa title/description/content'e yazılır.")
     author = models.ForeignKey(User, on_delete=models.CASCADE, related_name='questions')
     category = models.ForeignKey(
         'categories.Category',

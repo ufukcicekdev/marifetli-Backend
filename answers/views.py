@@ -110,10 +110,14 @@ class AnswerDetailView(generics.RetrieveUpdateDestroyAPIView):
         return super().update(request, *args, **kwargs)
 
     def perform_update(self, serializer):
+        instance = self.get_object()
+        old_content = instance.content or ""
         instance = serializer.save()
-        # Düzenleme sonrası tekrar moderasyona gönder
+        # Yeni metni pending_content'e yaz; canlıda eski hali kalsın; reddedilirse eski hali kalır
+        instance.pending_content = instance.content or ""
+        instance.content = old_content
         instance.moderation_status = 0
-        instance.save(update_fields=["moderation_status"])
+        instance.save(update_fields=["pending_content", "content", "moderation_status"])
         pk, model_label = instance.pk, "answers.Answer"
 
         def enqueue():

@@ -10,6 +10,7 @@ class Answer(models.Model):
     parent = models.ForeignKey('self', null=True, blank=True, on_delete=models.CASCADE, related_name='replies')
     author = models.ForeignKey(User, on_delete=models.CASCADE, related_name='answers')
     content = models.TextField()
+    pending_content = models.TextField(null=True, blank=True, help_text="Düzenleme sonrası moderasyona giden metin; onaylanırsa content'e yazılır.")
     is_best_answer = models.BooleanField(default=False)
     like_count = models.PositiveIntegerField(default=0)
     MODERATION_STATUS_CHOICES = [
