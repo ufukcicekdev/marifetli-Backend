@@ -1,7 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from .models import Answer, AnswerLike, AnswerReport
-from questions.serializers import QuestionListSerializer
 from users.serializers import UserSerializer
 
 User = get_user_model()
@@ -9,7 +8,6 @@ User = get_user_model()
 
 class AnswerSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
-    question = QuestionListSerializer(read_only=True)
 
     class Meta:
         model = Answer
