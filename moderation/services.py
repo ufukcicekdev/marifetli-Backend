@@ -47,7 +47,8 @@ def _normalize_for_check(text):
 
 def check_text_bad_words(text):
     """
-    Metinde kötü kelime var mı kontrol eder (alt string eşleşmesi).
+    Metinde kötü kelime var mı kontrol eder.
+    Alt string yerine TAM KELİME eşleşmesi kullanır (kelime sınırları).
     Returns: (has_bad: bool, words_found: list[str])
     """
     normalized = _normalize_for_check(text)
@@ -56,7 +57,13 @@ def check_text_bad_words(text):
     bad_list = get_bad_word_list()
     if not bad_list:
         return False, []
-    found = [w for w in bad_list if w in normalized]
+    found = []
+    for w in bad_list:
+        # Örn: w = "amk" -> r"\bamk\b" sadece tam kelimeyi yakalar,
+        # "selamlar" gibi kelimelerin içindeki "am" eşleşmez.
+        pattern = r"\b" + re.escape(w) + r"\b"
+        if re.search(pattern, normalized):
+            found.append(w)
     return len(found) > 0, found
 
 
