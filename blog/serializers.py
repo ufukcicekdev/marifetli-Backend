@@ -38,6 +38,17 @@ class BlogCommentCreateSerializer(serializers.ModelSerializer):
         fields = ('content',)
 
 
+class BlogPostCreateSerializer(serializers.ModelSerializer):
+    """n8n / otomasyon API için: title, content zorunlu; excerpt, is_published opsiyonel."""
+    class Meta:
+        model = BlogPost
+        fields = ('title', 'excerpt', 'content', 'is_published')
+        extra_kwargs = {
+            'excerpt': {'required': False, 'allow_blank': True},
+            'is_published': {'required': False, 'default': True},
+        }
+
+
 class BlogPostDetailSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
     comments = BlogCommentSerializer(many=True, read_only=True)

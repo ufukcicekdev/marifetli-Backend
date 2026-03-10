@@ -1,22 +1,71 @@
 import logging
 import threading
 
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated, AllowAny, IsAuthenticatedOrReadOnly
+from rest_framework.permissions import BasePermission, IsAuthenticated, AllowAny, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
-from django.utils import timezone
 
 from core.permissions import IsVerified
 
 logger = logging.getLogger(__name__)
+User = get_user_model()
 from .models import BlogPost, BlogComment, BlogLike
 from .serializers import (
     BlogPostListSerializer,
     BlogPostDetailSerializer,
+    BlogPostCreateSerializer,
     BlogCommentSerializer,
     BlogCommentCreateSerializer,
 )
+
+
+class BlogApiKeyPermission(BasePermission):
+    """X-API-Key header ile BLOG_API_KEY eşleşirse istek kabul edilir (n8n otomasyonu için)."""
+    def has_permission(self, request, view):
+        key = request.META.get("HTTP_X_API_KEY") or request.headers.get("X-API-Key")
+        expected = getattr(settings, "BLOG_API_KEY", "") or ""
+        return bool(expected and key and key.strip() == expected)
+
+
+def _get_blog_author():
+    """Blog API ile oluşturulan yazıların yazarı. BLOG_AUTHOR_USERNAME varsa o kullanıcı, yoksa ilk superuser."""
+    username = getattr(settings, "BLOG_AUTHOR_USERNAME", "") or ""
+    if username:
+        user = User.objects.filter(username=username).first()
+        if user:
+            return user
+    return User.objects.filter(is_superuser=True).order_by("pk").first()
+
+
+class BlogPostPublishView(generics.CreateAPIView):
+    """
+    n8n vb. otomasyonlardan blog yazısı eklemek için API.
+    Kimlik: Request header'da X-API-Key: <BLOG_API_KEY> gönderin.
+    Body (JSON): title (zorunlu), content (zorunlu), excerpt (opsiyonel), is_published (opsiyonel, varsayılan true).
+    """
+    permission_classes = [BlogApiKeyPermission]
+    serializer_class = BlogPostCreateSerializer
+
+    def create(self, request, *args, **kwargs):
+        author = _get_blog_author()
+        if not author:
+            return Response(
+                {"detail": "Blog yazarı bulunamadı. BLOG_AUTHOR_USERNAME veya en az bir superuser gerekli."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        is_published = serializer.validated_data.get("is_published", True)
+        post = serializer.save(author=author, is_published=is_published)
+        if is_published and not post.published_at:
+            post.published_at = timezone.now()
+            post.save(update_fields=["published_at"])
+        out = BlogPostDetailSerializer(post, context={"request": request})
+        return Response(out.data, status=status.HTTP_201_CREATED)
 
 
 class BlogPostListView(generics.ListAPIView):

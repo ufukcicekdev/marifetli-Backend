@@ -379,6 +379,10 @@ SOCIAL_AUTH_POSTGRES_JSONFIELD = True
 SMTP2GO_API_KEY = config("SMTP2GO_API_KEY", default="")
 SMTP2GO_FROM_EMAIL = config("SMTP2GO_FROM_EMAIL", default="noreply@marifetli.com")
 
+# Blog API (n8n vb. otomasyonlardan yazı eklemek için). X-API-Key header ile kimlik doğrulama.
+BLOG_API_KEY = config("BLOG_API_KEY", default="").strip()
+BLOG_AUTHOR_USERNAME = config("BLOG_AUTHOR_USERNAME", default="").strip()  # Boşsa ilk superuser kullanılır
+
 # Firebase Cloud Messaging (push bildirimleri) - .env'e FIREBASE_CREDENTIALS_PATH=path/to/serviceAccountKey.json ekle
 FIREBASE_CREDENTIALS_PATH = config("FIREBASE_CREDENTIALS_PATH", default="")
 
