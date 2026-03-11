@@ -3,6 +3,7 @@ from . import views
 
 urlpatterns = [
     path('steps/', views.OnboardingStepListView.as_view()),
+    path('my-selections/', views.OnboardingMySelectionsView.as_view()),
     path('submit/', views.OnboardingSubmitView.as_view()),
     path('complete/', views.OnboardingCompleteView.as_view()),
     path('status/', views.OnboardingStatusView.as_view()),

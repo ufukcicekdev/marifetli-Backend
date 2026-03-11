@@ -83,6 +83,11 @@ class CommunityCreateView(generics.CreateAPIView):
     serializer_class = CommunityCreateSerializer
     permission_classes = [IsAuthenticated, IsVerified]
 
+    def perform_create(self, serializer):
+        community = serializer.save()
+        from achievements.services import check_and_award_on_first_community
+        check_and_award_on_first_community(community.owner)
+
 
 class CommunityDetailView(generics.RetrieveAPIView):
     """Tekil topluluk detay."""

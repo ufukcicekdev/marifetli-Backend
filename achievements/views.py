@@ -52,6 +52,23 @@ def _get_progress_for_achievement(user, a):
         # Farklı sorulardaki cevap sayısı (aynı soruya birden fazla cevap tek sayılır)
         current = Answer.objects.filter(author=user).values('question').distinct().count()
         return min(current, target), target
+    # 100 soru / 100 cevap (hedef migration'da yoksa burada 100 kullan)
+    if a.code == 'question_master_100':
+        from questions.models import Question
+        current = Question.objects.filter(author=user, status='open').count()
+        t = target or 100
+        return min(current, t), t
+    if a.code == 'answer_master_100':
+        from answers.models import Answer
+        current = Answer.objects.filter(author=user).values('question').distinct().count()
+        t = target or 100
+        return min(current, t), t
+    # Topluluk kurucusu: en az 1 topluluk oluşturma
+    if a.code == 'first_community':
+        from communities.models import Community
+        current = Community.objects.filter(owner=user).count()
+        t = target or 1
+        return min(current, t), t
     return current, target
 
 

@@ -90,6 +90,11 @@ def check_and_award_on_followers(user: User, followers_count: int) -> None:
         award_achievement(user, 'popular_10')
 
 
+def check_and_award_on_first_community(user: User) -> None:
+    """İlk topluluk oluşturulduğunda: Topluluk Kurucusu"""
+    award_achievement(user, 'first_community')
+
+
 def record_activity_and_check_streak(user: User) -> None:
     """
     Kullanıcının bugün bir aktivite yaptığını kaydeder (yorum, beğeni, gönderi).

@@ -14,6 +14,7 @@ from pathlib import Path
 import os
 from datetime import timedelta
 from decouple import config, Csv
+from celery.schedules import crontab
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -66,6 +67,7 @@ INSTALLED_APPS = [
     "blog",
     "communities",
     "logs",
+    "search_console",
 ]
 
 MIDDLEWARE = [
@@ -284,6 +286,12 @@ FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
 # Backend URL - e-posta şablonlarındaki logo vb. mutlak URL'ler için (örn. https://api.marifetli.com.tr)
 BACKEND_URL = config("BACKEND_URL", default="").strip().rstrip("/") or None
 
+# Search Console / sitemap ping (Google/Bing indexleme) - sitemap'lerin sunulduğu site URL'i
+SEARCH_CONSOLE_SITE_URL = config(
+    "SEARCH_CONSOLE_SITE_URL",
+    default=FRONTEND_URL or "https://www.marifetli.com.tr",
+).strip().rstrip("/")
+
 # CORS - FRONTEND_URL .env'de tanımlı; aynı domain'in www / www'süz hali de eklenir
 def _cors_origins_list():
     base = FRONTEND_URL.rstrip("/")
@@ -425,6 +433,14 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_TIMEZONE = "Europe/Istanbul"
 
+# Celery Beat - periyodik görevler (sitemap ping günde 3 kez, Europe/Istanbul)
+CELERY_BEAT_SCHEDULE = {
+    "ping-sitemaps": {
+        "task": "search_console.ping_sitemaps",
+        "schedule": crontab(hour="8,14,20", minute=0),  # 08:00, 14:00, 20:00
+    },
+}
+
 # Loglama: varsayılan konsola gider; LOG_DIR verilirse dosyaya; logs app ile DB'ye yazılır.
 LOG_DIR = config("LOG_DIR", default="")
 LOG_TO_DB = config("LOG_TO_DB", default=True, cast=bool)  # False ile DB'ye yazmayı kapat
@@ -444,6 +460,7 @@ LOGGING = {
     "loggers": {
         "moderation": {"level": "INFO", "handlers": ["console"], "propagate": False},
         "cronjobs": {"level": "INFO", "handlers": ["console"], "propagate": False},
+        "search_console": {"level": "INFO", "handlers": ["console"], "propagate": False},
     },
 }
 if LOG_DIR:
@@ -454,8 +471,8 @@ if LOG_DIR:
         "formatter": "verbose",
     }
     LOGGING["root"]["handlers"].append("file")
-    for name in ("moderation", "cronjobs"):
-        if "file" not in LOGGING["loggers"][name]["handlers"]:
+    for name in ("moderation", "cronjobs", "search_console"):
+        if name in LOGGING["loggers"] and "file" not in LOGGING["loggers"][name]["handlers"]:
             LOGGING["loggers"][name]["handlers"].append("file")
 if LOG_TO_DB:
     LOGGING["handlers"]["db"] = {
@@ -463,6 +480,6 @@ if LOG_TO_DB:
         "formatter": "verbose",
         "source": "",
     }
-    for name in ("moderation", "cronjobs"):
-        if "db" not in LOGGING["loggers"][name]["handlers"]:
+    for name in ("moderation", "cronjobs", "search_console"):
+        if name in LOGGING["loggers"] and "db" not in LOGGING["loggers"][name]["handlers"]:
             LOGGING["loggers"][name]["handlers"].append("db")

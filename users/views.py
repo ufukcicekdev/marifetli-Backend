@@ -194,6 +194,11 @@ class UserDetailView(generics.RetrieveUpdateAPIView):
     def get_object(self):
         return self.request.user
 
+    def perform_update(self, serializer):
+        serializer.save()
+        from achievements.services import check_and_award_on_profile_complete
+        check_and_award_on_profile_complete(self.request.user)
+
 
 class UserByUsernameView(generics.GenericAPIView):
     """Public profile - get user by username (AllowAny)"""
@@ -301,6 +306,10 @@ class FollowUserView(generics.CreateAPIView):
             'follow',
             f"{self.request.user.username} seni takip etmeye başladı",
         )
+        # Takipçi sayısına göre başarı (Popüler 10)
+        followers_count = Follow.objects.filter(following=follow.following).count()
+        from achievements.services import check_and_award_on_followers
+        check_and_award_on_followers(follow.following, followers_count)
 
 
 class UnfollowUserView(generics.DestroyAPIView):
