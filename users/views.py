@@ -220,6 +220,19 @@ class UserByUsernameView(generics.GenericAPIView):
         followers_count = Follow.objects.filter(following=user).count()
         following_count = Follow.objects.filter(follower=user).count()
 
+        # Takip ettiklerim sayısına üye olunan (yöneticisi olunmayan) toplulukları da ekle
+        from django.db.models import Q
+        from communities.models import Community, CommunityMember, MEMBER_ROLE_MOD
+        managed_community_ids = set(
+            Community.objects.filter(
+                Q(owner=user) | Q(members__user=user, members__role=MEMBER_ROLE_MOD)
+            ).distinct().values_list('id', flat=True)
+        )
+        followed_community_count = CommunityMember.objects.filter(user=user).exclude(
+            community_id__in=managed_community_ids
+        ).count()
+        following_count += followed_community_count
+
         data = {
             'id': user.id,
             'username': user.username,

@@ -58,6 +58,14 @@ class Question(models.Model):
         blank=True,
         related_name='questions'
     )
+    community = models.ForeignKey(
+        'communities.Community',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='questions',
+        help_text='Bu soru hangi toplulukta soruldu (üye ise topluluk sayfasından sorulabilir).',
+    )
     tags = models.ManyToManyField(Tag, blank=True, related_name='questions')
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='open')
     MODERATION_STATUS_CHOICES = [

@@ -5,7 +5,7 @@ from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAuthenticatedOrReadOnly
 from rest_framework.response import Response
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, PermissionDenied
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.conf import settings
@@ -36,15 +36,21 @@ class QuestionListView(generics.ListCreateAPIView):
     def get_queryset(self):
         qs = (
             Question.objects.all()
-            .select_related('author', 'category')
+            .select_related('author', 'category', 'community')
             .prefetch_related('tags')
         )
         user = self.request.user
         # Kullanıcı kendi sorularını listeliyorsa sadece onaylı veya beklemede olanları görür; reddedilen (2) gösterilmez
         if user.is_authenticated and self.request.query_params.get('author') == str(user.id):
-            return qs.filter(author=user).exclude(moderation_status=2)
-        # Genel liste: taslaklar hariç, sadece onaylanmış sorular
-        return qs.exclude(status='draft').filter(moderation_status=1)
+            qs = qs.filter(author=user).exclude(moderation_status=2)
+        else:
+            # Genel liste: taslaklar hariç, sadece onaylanmış sorular
+            qs = qs.exclude(status='draft').filter(moderation_status=1)
+        # Topluluk içi arama: ?community=slug ile sadece o topluluktaki gönderiler
+        community_slug = (self.request.query_params.get('community') or '').strip()
+        if community_slug:
+            qs = qs.filter(community__slug=community_slug)
+        return qs
 
     search_fields = ['title', 'description', 'content']
     ordering_fields = ['created_at', 'updated_at', 'like_count', 'answer_count', 'view_count', 'hot_score']
@@ -151,6 +157,8 @@ class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
         threading.Thread(target=enqueue, daemon=True).start()
 
     def perform_destroy(self, instance):
+        if instance.author_id != self.request.user.pk:
+            raise PermissionDenied()
         instance.delete()
         invalidate_question_list()
 

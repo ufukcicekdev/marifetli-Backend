@@ -17,12 +17,21 @@ class TagSerializer(serializers.ModelSerializer):
 class QuestionListSerializer(serializers.ModelSerializer):
     author = UserSerializer(read_only=True)
     tags = TagSerializer(many=True, read_only=True)
+    community_slug = serializers.SerializerMethodField()
+    community_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Question
         fields = ('id', 'title', 'slug', 'description', 'content', 'author', 'tags', 'status',
-                  'view_count', 'like_count', 'answer_count', 'is_resolved',
+                  'view_count', 'like_count', 'answer_count', 'is_resolved', 'hot_score',
+                  'community', 'community_slug', 'community_name',
                   'created_at', 'updated_at')
+
+    def get_community_slug(self, obj):
+        return obj.community.slug if obj.community_id else None
+
+    def get_community_name(self, obj):
+        return obj.community.name if obj.community_id else None
 
 
 class QuestionDetailSerializer(serializers.ModelSerializer):
@@ -30,16 +39,18 @@ class QuestionDetailSerializer(serializers.ModelSerializer):
     tags = TagSerializer(many=True, read_only=True)
     category_slug = serializers.SerializerMethodField()
     category_name = serializers.SerializerMethodField()
+    community_slug = serializers.SerializerMethodField()
+    community_name = serializers.SerializerMethodField()
     answers = serializers.SerializerMethodField()
 
     class Meta:
         model = Question
         fields = [
-            'id', 'title', 'slug', 'description', 'content', 'author', 'category', 'tags',
-            'status', 'view_count', 'like_count', 'answer_count', 'is_resolved', 'is_anonymous',
+            'id', 'title', 'slug', 'description', 'content', 'author', 'category', 'community',
+            'tags', 'status', 'view_count', 'like_count', 'answer_count', 'is_resolved', 'is_anonymous',
             'is_deleted', 'deleted_at', 'hot_score', 'meta_title', 'meta_description',
             'best_answer', 'created_at', 'updated_at',
-            'category_slug', 'category_name',
+            'category_slug', 'category_name', 'community_slug', 'community_name',
             'answers',
         ]
 
@@ -48,6 +59,12 @@ class QuestionDetailSerializer(serializers.ModelSerializer):
 
     def get_category_name(self, obj):
         return obj.category.name if obj.category_id and getattr(obj.category, 'name', None) else None
+
+    def get_community_slug(self, obj):
+        return obj.community.slug if obj.community_id and getattr(obj.community, 'slug', None) else None
+
+    def get_community_name(self, obj):
+        return obj.community.name if obj.community_id and getattr(obj.community, 'name', None) else None
 
     def get_answers(self, obj):
         """
@@ -86,6 +103,19 @@ class QuestionCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Question
         exclude = ('author', 'slug', 'view_count', 'like_count', 'answer_count', 'is_resolved', 'best_answer')
+
+    def validate(self, attrs):
+        community = attrs.get('community')
+        if community:
+            from communities.models import CommunityMember, CommunityBan
+            request = self.context.get('request')
+            if not request or not request.user.is_authenticated:
+                raise serializers.ValidationError({'community': 'Toplulukta soru sormak için giriş yapmalısınız.'})
+            if CommunityBan.objects.filter(community=community, user=request.user).exists():
+                raise serializers.ValidationError({'community': 'Bu topluluktan yasaklandınız, soru soramazsınız.'})
+            if not CommunityMember.objects.filter(community=community, user=request.user).exists():
+                raise serializers.ValidationError({'community': 'Bu toplulukta soru sormak için üye olmalısınız.'})
+        return attrs
 
 
 class QuestionLikeSerializer(serializers.ModelSerializer):

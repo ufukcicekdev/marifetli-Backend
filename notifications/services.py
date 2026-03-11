@@ -17,7 +17,7 @@ def _should_send(recipient, setting_key: str) -> bool:
         return True
 
 
-def create_notification(recipient, sender, notification_type: str, message: str, *, question=None, answer=None):
+def create_notification(recipient, sender, notification_type: str, message: str, *, question=None, answer=None, community=None):
     """
     Bir bildirim kaydı oluşturur. İsteğe bağlı e-posta ve push gönderir.
     recipient: User; sender: User veya None (sistem bildirimi, örn. moderasyon).
@@ -31,6 +31,7 @@ def create_notification(recipient, sender, notification_type: str, message: str,
         message=message,
         question=question,
         answer=answer,
+        community=community,
     )
     # E-posta (ayarlara göre)
     if _should_send(recipient, 'email_notifications'):
