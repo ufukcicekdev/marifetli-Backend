@@ -67,6 +67,27 @@ def mark_all_as_read(request):
     return Response({'message': 'All notifications marked as read'}, status=status.HTTP_200_OK)
 
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsVerified])
+def send_test_push(request):
+    """Test push bildirimi gönderir (Firebase kurulumunu test etmek için)."""
+    from .models import FCMDeviceToken
+    from .services import send_fcm_to_user
+    tokens_count = FCMDeviceToken.objects.filter(user=request.user).count()
+    if tokens_count == 0:
+        return Response(
+            {'sent': False, 'message': "Kayıtlı cihaz yok. Önce 'Bildirimleri aç' butonuna tıklayıp bildirim iznini verin."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    send_fcm_to_user(
+        request.user,
+        title='Marifetli test',
+        body='Push bildirimleri çalışıyor.',
+        notification_type='test',
+    )
+    return Response({'sent': True, 'devices': tokens_count, 'message': 'Test push gönderildi.'})
+
+
 class NotificationSettingView(generics.RetrieveUpdateAPIView):
     serializer_class = NotificationSettingSerializer
     permission_classes = [IsAuthenticated, IsVerified]

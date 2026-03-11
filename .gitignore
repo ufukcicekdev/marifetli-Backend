@@ -41,6 +41,11 @@ db.sqlite3-journal
 .env.*.local
 *.env
 
+# Firebase service account key (asla commit etme)
+**/firebase*service*account*.json
+**/firebase*-*.json
+config/firebase*.json
+
 # Testing
 .coverage
 .pytest_cache/

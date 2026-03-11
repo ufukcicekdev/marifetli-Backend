@@ -74,11 +74,17 @@ def _send_fcm(tokens: list, title: str, body: str, data: dict = None):
     except ImportError:
         return
     cred_path = getattr(settings, 'FIREBASE_CREDENTIALS_PATH', None) or ''
-    if not cred_path:
+    cred_json = getattr(settings, 'FIREBASE_CREDENTIALS_JSON', None) or ''
+    if not cred_json and not cred_path:
         return
     if not firebase_admin._apps:
         try:
-            firebase_admin.initialize_app(credentials.Certificate(cred_path))
+            if cred_json:
+                import json
+                cred_dict = json.loads(cred_json)
+                firebase_admin.initialize_app(credentials.Certificate(cred_dict))
+            else:
+                firebase_admin.initialize_app(credentials.Certificate(cred_path))
         except Exception:
             return
     message = messaging.MulticastMessage(
