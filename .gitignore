@@ -45,6 +45,7 @@ db.sqlite3-journal
 **/firebase*service*account*.json
 **/firebase*-*.json
 config/firebase*.json
+**/marifetli-69927-firebase-adminsdk-fbsvc-0413c46b40.json
 
 # Testing
 .coverage

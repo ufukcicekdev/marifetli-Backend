@@ -10,6 +10,50 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
+class FCMService:
+    """Firebase Cloud Messaging ile push bildirim gönderimi."""
+
+    _initialized = False
+
+    @classmethod
+    def initialize(cls):
+        """Firebase Admin SDK'yı .env'deki credentials ile başlatır."""
+        if cls._initialized:
+            return
+        try:
+            import firebase_admin
+            from firebase_admin import credentials
+        except ImportError as e:
+            logger.warning("FCM: firebase_admin yüklü değil: %s", e)
+            return
+        if firebase_admin._apps:
+            cls._initialized = True
+            return
+        project_id = getattr(settings, 'FIREBASE_PROJECT_ID', None) or ''
+        private_key = getattr(settings, 'FIREBASE_PRIVATE_KEY', None) or ''
+        client_email = getattr(settings, 'FIREBASE_CLIENT_EMAIL', None) or ''
+        print("project_id", project_id)
+        print("private_key", private_key)
+        print("client_email", client_email)
+        if not (project_id and private_key and client_email):
+            logger.warning("Firebase credentials not found in settings. Push notifications disabled.")
+            return
+        try:
+            cred_dict = {
+                "type": "service_account",
+                "project_id": project_id,
+                "private_key": private_key.replace('\\n', '\n'),  # Fix escaped newlines
+                "client_email": client_email,
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            cls._initialized = True
+            logger.info("Firebase Admin SDK initialized successfully")
+        except Exception as e:
+            logger.error("Error initializing Firebase Admin SDK: %s", e)
+
+
 def _should_send(recipient, setting_key: str) -> bool:
     """Kullanıcı bu tür bildirimleri almak istiyor mu?"""
     try:
@@ -100,50 +144,16 @@ def send_fcm_to_user(user, title: str, body: str, notification_type: str = '', q
 
 
 def _send_fcm(tokens: list, title: str, body: str, data: dict = None):
-    """Firebase Cloud Messaging ile push gönder. Config yoksa veya hata olursa loglar."""
+    """Firebase Cloud Messaging ile push gönder. FCMService.initialize() kullanır."""
     if not tokens:
         return
+    FCMService.initialize()
+    if not FCMService._initialized:
+        return
     try:
-        import firebase_admin
-        from firebase_admin import credentials, messaging
-    except ImportError as e:
-        logger.warning("FCM: firebase_admin yüklü değil: %s", e)
+        from firebase_admin import messaging
+    except ImportError:
         return
-    cred_path = getattr(settings, 'FIREBASE_CREDENTIALS_PATH', None) or ''
-    cred_json = getattr(settings, 'FIREBASE_CREDENTIALS_JSON', None) or ''
-    project_id = getattr(settings, 'FIREBASE_PROJECT_ID', None) or ''
-    private_key = getattr(settings, 'FIREBASE_PRIVATE_KEY', None) or ''
-    client_email = getattr(settings, 'FIREBASE_CLIENT_EMAIL', None) or ''
-
-    if not cred_json and not cred_path and not (project_id and private_key and client_email):
-        logger.debug("FCM: credentials yok (FIREBASE_PROJECT_ID/PRIVATE_KEY/CLIENT_EMAIL veya CREDENTIALS_JSON veya PATH)")
-        return
-    if not firebase_admin._apps:
-        try:
-            if project_id and private_key and client_email:
-                # Env'den tek tek verilen anahtarlar (private_key'ta \n literal olarak gelebilir)
-                pk = private_key.replace('\\n', '\n').strip()
-                cred_dict = {
-                    'type': 'service_account',
-                    'project_id': project_id,
-                    'private_key_id': '',
-                    'private_key': pk,
-                    'client_email': client_email,
-                    'client_id': '',
-                    'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
-                    'token_uri': 'https://oauth2.googleapis.com/token',
-                }
-                firebase_admin.initialize_app(credentials.Certificate(cred_dict))
-            elif cred_json:
-                import json
-                cred_dict = json.loads(cred_json)
-                firebase_admin.initialize_app(credentials.Certificate(cred_dict))
-            else:
-                firebase_admin.initialize_app(credentials.Certificate(cred_path))
-        except Exception as e:
-            logger.exception("FCM: initialize_app hatası: %s", e)
-            return
-    # FCM data payload values must be strings
     data_flat = {k: str(v) for k, v in (data or {}).items()}
     message = messaging.MulticastMessage(
         notification=messaging.Notification(title=title, body=body),

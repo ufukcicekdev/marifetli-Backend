@@ -391,15 +391,10 @@ SMTP2GO_FROM_EMAIL = config("SMTP2GO_FROM_EMAIL", default="noreply@marifetli.com
 BLOG_API_KEY = config("BLOG_API_KEY", default="").strip()
 BLOG_AUTHOR_USERNAME = config("BLOG_AUTHOR_USERNAME", default="").strip()  # Boşsa ilk superuser kullanılır
 
-# Firebase Cloud Messaging (push bildirimleri)
-# Seçenek 1: Tek tek env (Railway vb.) — FIREBASE_PROJECT_ID, FIREBASE_PRIVATE_KEY, FIREBASE_CLIENT_EMAIL
-# Seçenek 2: FIREBASE_CREDENTIALS_JSON='{"type":"service_account",...}' tek satır
-# Seçenek 3: FIREBASE_CREDENTIALS_PATH=config/firebase-service-account.json (yerel)
+# Firebase Cloud Messaging (push bildirimleri) — .env'den oku
 FIREBASE_PROJECT_ID = config("FIREBASE_PROJECT_ID", default="")
 FIREBASE_PRIVATE_KEY = config("FIREBASE_PRIVATE_KEY", default="")
 FIREBASE_CLIENT_EMAIL = config("FIREBASE_CLIENT_EMAIL", default="")
-FIREBASE_CREDENTIALS_PATH = config("FIREBASE_CREDENTIALS_PATH", default="")
-FIREBASE_CREDENTIALS_JSON = config("FIREBASE_CREDENTIALS_JSON", default="").strip()
 
 # Cache - yük azaltma ve ölçeklenebilirlik (Redis önerilir)
 # .env: REDIS_URL=redis://127.0.0.1:6379/0 (veya Railway/Upstash Redis URL)

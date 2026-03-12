@@ -211,3 +211,60 @@ Firebase JS paketi: `npm install firebase` (v10+).
 - **Frontend:** Giriş yaptıktan sonra bildirim izni verilir, token alınır ve `registerFCMToken` ile backend’e gönderilir. Sonra o kullanıcıya giden bildirimler tarayıcıda push olarak görünür.
 
 Config eklemezsen bildirimler yine oluşur (veritabanı + uygulama içi liste); sadece **push** (tarayıcı/mobil bildirim) gönderilmez.
+
+---
+
+## Sorun giderme: "401 Unauthorized" / "token-subscribe-failed"
+
+Tarayıcıda "Bildirimleri aç"a bastığında şu hata çıkarsa:
+
+- **"Request is missing required authentication credential"**
+- **"POST https://fcmregistrations.googleapis.com/... 401 (Unauthorized)"**
+- **"messaging/token-subscribe-failed"**
+
+Bunun nedeni **Google Cloud'da Web API anahtarının kısıtlı olması** veya **FCM API'nin kapalı olması**dır. Şunları yap:
+
+### 1. Firebase Cloud Messaging API açık mı?
+
+1. [Google Cloud Console](https://console.cloud.google.com/) → projeyi seç (Firebase projenle aynı).
+2. **API'ler ve Hizmetler** → **Kitaplık**.
+3. **"Firebase Cloud Messaging API"** ara → **Etkinleştir** (Enable). Kapalıysa aç.
+
+### 2. Web API anahtarı kısıtlamaları
+
+Frontend'de kullandığın **API anahtarı** (Firebase config'teki `apiKey`) Google Cloud'da kısıtlı olabilir.
+
+1. [Google Cloud Console](https://console.cloud.google.com/) → projeyi seç.
+2. **API'ler ve Hizmetler** → **Kimlik bilgileri**.
+3. **API anahtarları** bölümünde kullandığın anahtarı bul (Firebase'te "Web API Key" olarak geçer).
+4. Anahtara tıkla (düzenle).
+
+**Uygulama kısıtlamaları:**
+
+- **Yok** ise: Anahtar tüm referrer'larda çalışır; localhost dahil. 401 başka bir nedendir (FCM API kapalı vb.).
+- **HTTP referanslar** seçiliyse: Mutlaka şunları ekle:
+  - `http://localhost:*`
+  - `http://127.0.0.1:*`
+  - Canlı site: `https://www.marifetli.com.tr/*` (kendi domain'in neyse onu ekle).
+
+**API kısıtlamaları:**
+
+- **Tüm API'lere izin ver** seçiliyse sorun olmaz.
+- **Sadece belirli API'lere kısıtla** seçiliyse listeye **"Firebase Cloud Messaging API"** (ve varsa **"FCM Registrations API"**) ekle.
+
+Kaydedip birkaç dakika bekle; tarayıcıda sayfayı yenileyip tekrar "Bildirimleri aç"ı dene.
+
+### 3. Hâlâ 401 alıyorsan: Anahtarı geçici olarak kısıtlamasız dene
+
+Bunun API anahtarından kaynaklandığını netleştirmek için:
+
+1. [Google Cloud Console](https://console.cloud.google.com/) → **API'ler ve Hizmetler** → **Kimlik bilgileri**.
+2. **+ Kimlik bilgisi oluştur** → **API anahtarı**.
+3. Yeni anahtar oluşur. **Kısıtlamaları düzenle** açılmasın; **İptal** de (şimdilik kısıtlama yok).
+4. Bu yeni anahtarın değerini kopyala.
+5. Frontend `.env.local` içinde `NEXT_PUBLIC_FIREBASE_API_KEY=` değerini bu yeni anahtar ile değiştir.
+6. Sayfayı tam yenile (Ctrl+Shift+R) ve tekrar "Bildirimleri aç"ı dene.
+
+Eğer bu kısıtlamasız anahtar ile çalışıyorsa sorun kesinlikle eski anahtarın **uygulama** veya **API** kısıtlamalarındandır. Sonra ya bu yeni anahtarda sadece ihtiyacın olan kısıtlamaları ekle (HTTP referanslar + FCM API) ya da eski anahtarı düzelterek kullan.
+
+**Dikkat:** Anahtarın, Firebase projenin (marifetli-3d2d9) **aynı Google Cloud projesine** ait olduğundan emin ol. Firebase Console → Proje ayarları → Genel → "Proje Kimliği" ile Google Cloud’daki proje aynı olmalı.
