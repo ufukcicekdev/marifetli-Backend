@@ -123,6 +123,29 @@ def _build_notification_url(notification_type: str, question=None, answer=None, 
     return f"{base}{path}" if base else path
 
 
+def _notification_icon_type(notification_type: str) -> str:
+    """Bildirim türüne göre SW'da kullanılacak ikon anahtarı (beğeni/ yorum/ takip vb.)."""
+    if notification_type in ('like_question', 'like_answer'):
+        return 'like'
+    if notification_type == 'answer':
+        return 'comment'
+    if notification_type == 'follow':
+        return 'follow'
+    if notification_type == 'mention':
+        return 'mention'
+    if notification_type == 'community_join_request':
+        return 'community'
+    return 'default'
+
+
+def _sender_image_url(sender) -> str | None:
+    """Gönderenin profil resmi için tam URL (FCM image alanı için). S3 kullanıyorsan .url zaten tam döner."""
+    if not sender or not getattr(sender, 'profile_picture', None) or not sender.profile_picture:
+        return None
+    url = getattr(sender.profile_picture, 'url', None) or ''
+    return url if url.startswith('http') else None
+
+
 def send_fcm_to_user(user, title: str, body: str, notification_type: str = '', question=None, answer=None, sender=None):
     """
     Kullanıcının kayıtlı cihazlarına FCM push gönderir.
@@ -132,7 +155,7 @@ def send_fcm_to_user(user, title: str, body: str, notification_type: str = '', q
     if not tokens:
         logger.debug("FCM: user %s has no registered tokens, skip push", user.username)
         return
-    data = {'type': notification_type}
+    data = {'type': notification_type, 'icon_type': _notification_icon_type(notification_type)}
     if question_id := (question.pk if question else None):
         data['question_id'] = str(question_id)
     if question and getattr(question, 'slug', None):
@@ -140,10 +163,11 @@ def send_fcm_to_user(user, title: str, body: str, notification_type: str = '', q
     if answer_id := (answer.pk if answer else None):
         data['answer_id'] = str(answer_id)
     data['url'] = _build_notification_url(notification_type, question=question, answer=answer, sender=sender)
-    _send_fcm(tokens, title=title, body=body, data=data)
+    image_url = _sender_image_url(sender)
+    _send_fcm(tokens, title=title, body=body, data=data, image_url=image_url)
 
 
-def _send_fcm(tokens: list, title: str, body: str, data: dict = None):
+def _send_fcm(tokens: list, title: str, body: str, data: dict = None, image_url: str = None):
     """Firebase Cloud Messaging ile push gönder. FCMService.initialize() kullanır."""
     if not tokens:
         return
@@ -155,7 +179,10 @@ def _send_fcm(tokens: list, title: str, body: str, data: dict = None):
     except ImportError:
         return
     data_flat = {k: str(v) for k, v in (data or {}).items()}
-    notification = messaging.Notification(title=title, body=body)
+    notification_kw = {'title': title, 'body': body}
+    if image_url:
+        notification_kw['image'] = image_url
+    notification = messaging.Notification(**notification_kw)
     # firebase-admin 7+ send_multicast kaldırıldı; tek tek send() ile gönderiyoruz (tüm sürümlerde çalışır)
     for token in tokens:
         try:
