@@ -109,6 +109,17 @@ def moderate_content_task(model_label, pk):
                 a.pending_content = None
                 a.save(update_fields=["content", "pending_content"])
             update_answer_count(a)
+            # Soru sahibine bildirim sadece moderasyon onayından sonra (cevap kendi sorusuna değilse)
+            if a.question.author_id != a.author_id:
+                from notifications.services import create_notification
+                create_notification(
+                    a.question.author,
+                    a.author,
+                    'answer',
+                    f"{a.author.username} soruna cevap yazdı",
+                    question=a.question,
+                    answer=a,
+                )
 
         def answer_clear_pending(a):
             if getattr(a, "pending_content", None):

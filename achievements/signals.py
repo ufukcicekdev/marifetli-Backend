@@ -58,17 +58,7 @@ def on_answer_created(sender, instance, created, **kwargs):
         services.record_activity_and_check_streak(user)
         from reputation.services import award_reputation
         award_reputation(user, 'answer_posted', content_object=instance, description='Cevap yazdın')
-        # Soru sahibine bildirim (cevap kendi sorusuna değilse)
-        if instance.question.author_id != user.pk:
-            from notifications.services import create_notification
-            create_notification(
-                instance.question.author,
-                user,
-                'answer',
-                f"{user.username} soruna cevap yazdı",
-                question=instance.question,
-                answer=instance,
-            )
+        # Soru sahibine bildirim moderasyondan geçip yayınlandıktan sonra gönderilir (cronjobs.tasks answer on_approved)
 
 
 def connect_signals():
