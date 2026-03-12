@@ -10,8 +10,8 @@ if [ "$ROLE" = "1" ]; then
   echo "[start.sh] Starting healthcheck HTTP server + Celery worker..."
   # Sadece healthcheck için çok hafif HTTP server (PORT üzerinde 200 döner)
   python -m http.server "$PORT" &
-  # Asıl iş yapan Celery worker
-  exec celery -A marifetli_project worker -l info
+  # Worker + Beat (günde 3 kez sitemap ping vb. zamanlanmış görevler için -B)
+  exec celery -A marifetli_project worker -l info -B
   
 else
   echo "[start.sh] Running migrate..."

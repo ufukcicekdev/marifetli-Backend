@@ -1,90 +1,71 @@
-# Search Console / Sitemap Indexleme
+# Search Console & Sitemap Ping
 
-Yeni sorular, blog yazıları ve sayfaların Google (ve Bing) tarafından daha hızlı indexlenmesi için sitemap ping ve isteğe bağlı Search Console API entegrasyonu.
+## 1. Sitemap’i Search Console’da görmek
 
-## 1. Sitemap ping (önerilen, API anahtarı gerekmez)
+**Ping** sadece Google/Bing’e “sitemap güncellendi, tekrar tara” der; sitemap’i Search Console arayüzüne **eklemez**.
 
-Google ve Bing’e “sitemap güncellendi” bildirimi gönderir. Arama motorları sitemap’i tekrar tarayıp yeni URL’leri keşfeder.
+Sitemap’in GSC’de listelenmesi için **bir kez manuel eklemen** gerekir:
 
-### Komut
+1. [Google Search Console](https://search.google.com/search-console) → Siteni seç.
+2. Sol menüden **Sitemaps** (Site haritası) aç.
+3. “Yeni site haritası ekle” alanına **`sitemap.xml`** yaz (veya tam URL: `https://www.marifetli.com.tr/sitemap.xml`).
+4. **Gönder**’e tıkla.
 
-```bash
-python manage.py ping_sitemaps
-```
-
-### Ne yapılır?
-
-- `SEARCH_CONSOLE_SITE_URL` (veya `FRONTEND_URL`) ile sitemap tam URL’leri oluşturulur.
-- Varsayılan sitemap’ler: `sitemap.xml`, `sitemap-static.xml`, `sitemap-questions.xml`, `sitemap-blog.xml`
-- Her biri için `https://www.google.com/ping?sitemap=...` ve `https://www.bing.com/ping?sitemap=...` çağrılır.
-
-### Günde 3 kez otomatik (Celery Beat)
-
-Projede Celery Beat açıksa sitemap ping **zaten periyodik çalışır** (settings’te `CELERY_BEAT_SCHEDULE`): 08:00, 14:00, 20:00 (Europe/Istanbul).
-
-Celery worker + beat’i şöyle başlatın:
-
-```bash
-# Worker
-celery -A marifetli_project worker -l info
-
-# Beat (ayrı process veya aynı makinede)
-celery -A marifetli_project beat -l info
-```
-
-İsterseniz tek seferlik manuel çalıştırma:
-
-```bash
-python manage.py ping_sitemaps
-```
-
-Cron kullanacaksanız (Beat yoksa):
-
-```cron
-0 8,14,20 * * * cd /path/to/backend && python manage.py ping_sitemaps
-```
-
-### Ayarlar (.env)
-
-| Değişken | Açıklama |
-|----------|----------|
-| `SEARCH_CONSOLE_SITE_URL` | Sitemap’lerin sunulduğu site (örn. `https://www.marifetli.com.tr`). Boşsa `FRONTEND_URL` kullanılır. |
+Bundan sonra GSC sitemap’i listeler ve ping’ler güncellemeyi tetikler.
 
 ---
 
-## 2. Google Search Console API (opsiyonel)
+## 2. Günde 3 kez ping (Celery Beat)
 
-Sitemap’leri GSC property’ye programatik olarak submit etmek için (ilk kurulum veya sitemap listesini API ile güncellemek isterseniz).
+Ping’in günde 3 kez (08:00, 14:00, 20:00 – Europe/Istanbul) otomatik çalışması için **Celery Beat**’in ayakta olması gerekir. Sadece worker çalışıyorsa zamanlanmış görev tetiklenmez.
 
-### Gereksinimler
+### Yerelde
 
-1. **Google Cloud Console**
-   - Proje oluştur
-   - “Google Search Console API” etkinleştir
-   - Service account oluştur, JSON anahtar indir
-
-2. **Google Search Console**
-   - Site property’sine (URL-prefix) service account e-posta adresini “Kullanıcı” olarak ekle
-
-3. **Backend**
-   - `pip install google-api-python-client google-auth`
-   - JSON dosya yolunu ayarla (aşağıda)
-
-### Komut
+İki ayrı terminalde:
 
 ```bash
-python manage.py submit_sitemaps_gsc
+# Terminal 1: Worker (görevleri işler)
+celery -A marifetli_project worker -l info
+
+# Terminal 2: Beat (zamanlanmış görevi tetikler)
+celery -A marifetli_project beat -l info
 ```
 
-### Ayarlar
+Tek komutla (worker + beat birlikte):
 
-| Ayar | Açıklama |
-|------|----------|
-| `SEARCH_CONSOLE_CREDENTIALS_PATH` veya `GOOGLE_APPLICATION_CREDENTIALS` | Service account JSON dosyasının yolu |
+```bash
+celery -A marifetli_project worker -l info -B
+```
+
+### Canlıda (Railway / Render / vb.)
+
+- **Worker** için bir process: `celery -A marifetli_project worker -l info`
+- **Beat** için ayrı bir process: `celery -A marifetli_project beat -l info`
+
+Beat’i ayrı bir servis/process olarak tanımlamazsan `ping-sitemaps` zamanlaması hiç çalışmaz.
+
+---
+
+## 3. Manuel test
+
+Ping’i hemen denemek için:
+
+```bash
+cd backend
+python manage.py ping_sitemaps
+```
+
+Sitemap URL’lerini görmek için:
+
+```bash
+python manage.py list_sitemap_urls
+```
 
 ---
 
 ## Özet
 
-- **Sadece indexleme hızı** için: `ping_sitemaps` yeterli; günde 2–3 kez cron ile çalıştırın.
-- **GSC’de sitemap listesini API ile yönetmek** isterseniz: `submit_sitemaps_gsc` ve service account kurulumu kullanın.
+| Ne | Nasıl |
+|----|--------|
+| Sitemap GSC’de görünsün | Search Console → Sitemaps → “sitemap.xml” ekle, Gönder. |
+| Ping günde 3 kez gitsin | Celery **Beat** process’ini çalıştır (worker’dan ayrı veya `-B` ile). |
