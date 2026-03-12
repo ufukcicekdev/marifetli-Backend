@@ -155,20 +155,14 @@ def _send_fcm(tokens: list, title: str, body: str, data: dict = None):
     except ImportError:
         return
     data_flat = {k: str(v) for k, v in (data or {}).items()}
-    message = messaging.MulticastMessage(
-        notification=messaging.Notification(title=title, body=body),
-        data=data_flat,
-        tokens=tokens,
-    )
-    try:
-        response = messaging.send_multicast(message)
-        if response.failure_count > 0:
-            for i, send_response in enumerate(response.responses):
-                if not send_response.success:
-                    logger.warning(
-                        "FCM: token[%s] gönderilemedi: %s",
-                        i,
-                        getattr(send_response.exception, 'message', send_response.exception),
-                    )
-    except Exception as e:
-        logger.exception("FCM: send_multicast hatası: %s", e)
+    notification = messaging.Notification(title=title, body=body)
+    # firebase-admin 7+ send_multicast kaldırıldı; tek tek send() ile gönderiyoruz (tüm sürümlerde çalışır)
+    for token in tokens:
+        try:
+            msg = messaging.Message(notification=notification, data=data_flat or {}, token=token)
+            messaging.send(msg)
+        except Exception as e:
+            logger.warning(
+                "FCM: token gönderilemedi: %s",
+                getattr(e, 'message', str(e)),
+            )

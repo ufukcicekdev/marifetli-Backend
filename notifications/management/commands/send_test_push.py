@@ -6,13 +6,17 @@ User = get_user_model()
 
 
 class Command(BaseCommand):
-    help = "Belirtilen kullanıcıya test push bildirimi gönderir. Örnek: python manage.py send_test_push demo"
+    help = "Belirtilen kullanıcıya test push bildirimi gönderir."
 
     def add_arguments(self, parser):
         parser.add_argument('username', type=str, help='Kullanıcı adı (örn. demo)')
+        parser.add_argument('--title', type=str, default='Marifetli test', help='Bildirim başlığı')
+        parser.add_argument('--body', type=str, default='Push bildirimleri çalışıyor.', help='Bildirim metni')
 
     def handle(self, *args, **options):
         username = options['username']
+        title = options['title']
+        body = options['body']
         try:
             user = User.objects.get(username=username)
         except User.DoesNotExist:
@@ -28,5 +32,5 @@ class Command(BaseCommand):
                 )
             )
             return
-        send_fcm_to_user(user, 'Marifetli test', 'Push bildirimleri çalışıyor.', 'test')
-        self.stdout.write(self.style.SUCCESS(f'Test push gönderildi ({count} cihaz).'))
+        send_fcm_to_user(user, title, body, 'test')
+        self.stdout.write(self.style.SUCCESS(f'Test push gönderildi ({count} cihaz): "{title}" — "{body}"'))
