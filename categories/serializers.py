@@ -8,7 +8,7 @@ class CategorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Category
-        fields = ['id', 'name', 'slug', 'parent', 'description', 'order', 'question_count', 'subcategories', 'is_following']
+        fields = ['id', 'name', 'slug', 'parent', 'description', 'order', 'question_count', 'meta_title', 'meta_description', 'subcategories', 'is_following']
 
     def get_subcategories(self, obj):
         if obj.subcategories.exists():

@@ -10,6 +10,7 @@ class CategoryListView(generics.ListAPIView):
     queryset = Category.objects.filter(parent=None).prefetch_related('subcategories')
     serializer_class = CategorySerializer
     permission_classes = [AllowAny]
+    pagination_class = None  # Sidebar'da tüm kategoriler tek seferde
 
 
 class CategoryDetailView(generics.RetrieveAPIView):

@@ -8,3 +8,12 @@ class CategoryAdmin(admin.ModelAdmin):
     list_filter = ('parent', 'target_gender')
     search_fields = ('name', 'slug')
     prepopulated_fields = {'slug': ('name',)}
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'slug', 'parent', 'description', 'target_gender', 'order'),
+        }),
+        ('SEO (arama sonuçları)', {
+            'fields': ('meta_title', 'meta_description'),
+            'description': 'Boş bırakırsanız sayfada otomatik başlık/açıklama kullanılır.',
+        }),
+    )

@@ -136,6 +136,14 @@ class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
         old_content = instance.content or ""
         instance = serializer.save()
         invalidate_question_list()
+        # Sadece metin (başlık/açıklama/içerik) değiştiyse moderasyona gönder; kategori/topluluk/etiket değişiminde listede kalsın
+        content_changed = (
+            (instance.title or "") != (old_title or "")
+            or (instance.description or "") != (old_description or "")
+            or (instance.content or "") != (old_content or "")
+        )
+        if not content_changed:
+            return
         # Yeni metni pending'e yaz; canlıda eski hali kalsın; reddedilirse eski hali kalır
         instance.pending_title = instance.title
         instance.pending_description = instance.description

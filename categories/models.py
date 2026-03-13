@@ -34,6 +34,9 @@ class Category(models.Model):
     description = models.TextField(blank=True)
     order = models.PositiveIntegerField(default=0)
     question_count = models.PositiveIntegerField(default=0)
+    # SEO (admin'den düzenlenir; boşsa sayfada name/description kullanılır)
+    meta_title = models.CharField('SEO başlık', max_length=70, blank=True, help_text='Arama sonuçlarında görünen başlık. Boş bırakılırsa "{name} Soruları" kullanılır.')
+    meta_description = models.CharField('SEO açıklama', max_length=160, blank=True, help_text='Arama sonuçlarında görünen kısa açıklama. Boş bırakılırsa description veya varsayılan metin kullanılır.')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
