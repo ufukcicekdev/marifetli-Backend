@@ -1,43 +1,26 @@
 """
-Google ve Bing'e sitemap ping atar; günde 2-3 kez çalıştırıldığında
-yeni soru, blog ve sayfaların indexlenmesine yardımcı olur.
-
-Kullanım:
-  python manage.py ping_sitemaps
-
-Celery Beat ile günde 3 kez otomatik çalışır (settings.CELERY_BEAT_SCHEDULE).
+Eski ping komutu — artık sadece Google Search Console API kullanılıyor (Bing/ping yok).
+submit_sitemaps_gsc ile aynı işi yapar (geriye dönük uyumluluk).
 """
 from django.core.management.base import BaseCommand
 
-from search_console.conf import get_site_base_url, get_sitemap_paths
-from search_console.services import run_ping_sitemaps
+from search_console.services import run_submit_sitemaps_gsc
 
 
 class Command(BaseCommand):
-    help = "Sitemap URL'lerini Google ve Bing ping servisine gönderir (indexleme için)."
+    help = "Sitemap'leri GSC API ile submit eder (ping kaldırıldı). Tercihen: python manage.py submit_sitemaps_gsc"
 
     def add_arguments(self, parser):
-        parser.add_argument(
-            '--dry-run',
-            action='store_true',
-            help='Sadece hangi URL\'lere ping atılacağını yazdır, istek atma.',
-        )
+        parser.add_argument("--dry-run", action="store_true", help="Sadece URL'leri listele.")
 
     def handle(self, *args, **options):
-        base = get_site_base_url()
-        paths = get_sitemap_paths()
-        dry_run = options['dry_run']
-        sitemap_urls = [f"{base}/{p.lstrip('/')}" for p in paths]
-
-        self.stdout.write(f"Site: {base}")
-        self.stdout.write(f"Sitemap'ler: {', '.join(sitemap_urls)}")
-
-        if dry_run:
-            for url in sitemap_urls:
-                self.stdout.write(self.style.WARNING(f"  [dry-run] ping edilecek: {url}"))
+        if options["dry_run"]:
+            from search_console.conf import get_site_base_url, get_sitemap_paths
+            base = get_site_base_url()
+            for p in get_sitemap_paths():
+                self.stdout.write(self.style.WARNING(f"  [dry-run] {base}/{p.lstrip('/')}"))
             return
-
-        result = run_ping_sitemaps()
-        for err in result['errors']:
-            self.stdout.write(self.style.ERROR(f"  {err}"))
-        self.stdout.write(self.style.SUCCESS(f"Ping tamamlandı: {result['ok']} OK, {result['failed']} hata."))
+        result = run_submit_sitemaps_gsc()
+        self.stdout.write(self.style.SUCCESS(f"ok={result['ok']} failed={result['failed']}"))
+        for err in result.get("errors", []):
+            self.stdout.write(self.style.ERROR(err))

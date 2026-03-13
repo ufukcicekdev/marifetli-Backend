@@ -396,6 +396,11 @@ FIREBASE_PROJECT_ID = config("FIREBASE_PROJECT_ID", default="")
 FIREBASE_PRIVATE_KEY = config("FIREBASE_PRIVATE_KEY", default="")
 FIREBASE_CLIENT_EMAIL = config("FIREBASE_CLIENT_EMAIL", default="")
 
+# Google Search Console API — sitemap submit (.env: GSC_PROJECT_ID, GSC_PRIVATE_KEY, GSC_CLIENT_EMAIL)
+GSC_PROJECT_ID = config("GSC_PROJECT_ID", default="")
+GSC_PRIVATE_KEY = config("GSC_PRIVATE_KEY", default="")
+GSC_CLIENT_EMAIL = config("GSC_CLIENT_EMAIL", default="")
+
 # Cache - yük azaltma ve ölçeklenebilirlik (Redis önerilir)
 # .env: REDIS_URL=redis://127.0.0.1:6379/0 (veya Railway/Upstash Redis URL)
 REDIS_URL = config("REDIS_URL", default="")
@@ -435,10 +440,10 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_TIMEZONE = "Europe/Istanbul"
 
-# Celery Beat - periyodik görevler (sitemap ping günde 3 kez, Europe/Istanbul)
+# Celery Beat - periyodik görevler (sitemap'leri GSC API ile submit, günde 3 kez)
 CELERY_BEAT_SCHEDULE = {
-    "ping-sitemaps": {
-        "task": "search_console.ping_sitemaps",
+    "submit-sitemaps-gsc": {
+        "task": "search_console.submit_sitemaps_gsc",
         "schedule": crontab(hour="8,14,20", minute=0),  # 08:00, 14:00, 20:00
     },
 }
