@@ -29,8 +29,15 @@ def root_view(request):
     from django.http import Http404
     raise Http404()
 
+# Sitemap'lar: domain backend'e yönleniyorsa ping 404 almasın diye (search_console.views)
+from search_console import views as search_console_views
+
 urlpatterns = [
     path('', root_view),
+    path('sitemap.xml', search_console_views.sitemap_index),
+    path('sitemap-static.xml', search_console_views.sitemap_static),
+    path('sitemap-questions.xml', search_console_views.sitemap_questions),
+    path('sitemap-blog.xml', search_console_views.sitemap_blog),
     path('admin/', admin.site.urls),
     path('api/', include('core.urls')),
     path('api/auth/', include('users.urls')),

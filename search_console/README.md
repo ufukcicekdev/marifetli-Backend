@@ -69,3 +69,4 @@ python manage.py list_sitemap_urls
 |----|--------|
 | Sitemap GSC’de görünsün | Search Console → Sitemaps → “sitemap.xml” ekle, Gönder. |
 | Ping günde 3 kez gitsin | Celery **Beat** process’ini çalıştır (worker’dan ayrı veya `-B` ile). |
+| Ping 404/410 alıyorsa | Sitemap'lar backend'de de sunuluyor. Domain backend'e yönleniyorsa deploy sonrası düzelir. |
