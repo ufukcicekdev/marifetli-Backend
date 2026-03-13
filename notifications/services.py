@@ -32,9 +32,6 @@ class FCMService:
         project_id = getattr(settings, 'FIREBASE_PROJECT_ID', None) or ''
         private_key = getattr(settings, 'FIREBASE_PRIVATE_KEY', None) or ''
         client_email = getattr(settings, 'FIREBASE_CLIENT_EMAIL', None) or ''
-        print("project_id", project_id)
-        print("private_key", private_key)
-        print("client_email", client_email)
         if not (project_id and private_key and client_email):
             logger.warning("Firebase credentials not found in settings. Push notifications disabled.")
             return
@@ -189,7 +186,11 @@ def _send_fcm(tokens: list, title: str, body: str, data: dict = None, image_url:
             msg = messaging.Message(notification=notification, data=data_flat or {}, token=token)
             messaging.send(msg)
         except Exception as e:
-            logger.warning(
-                "FCM: token gönderilemedi: %s",
-                getattr(e, 'message', str(e)),
-            )
+            err_msg = (getattr(e, 'message', None) or str(e)) or ''
+            err_lower = err_msg.lower()
+            logger.warning("FCM: token gönderilemedi: %s", err_msg)
+            # Geçersiz / silinmiş cihaz token'larını veritabanından kaldır (tekrar denemeyi durdur)
+            if 'notregistered' in err_lower or 'requested entity was not found' in err_lower:
+                deleted, _ = FCMDeviceToken.objects.filter(token=token).delete()
+                if deleted:
+                    logger.info("FCM: geçersiz token veritabanından silindi (user cihazı kaldırmış olabilir)")
