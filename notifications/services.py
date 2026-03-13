@@ -189,8 +189,14 @@ def _send_fcm(tokens: list, title: str, body: str, data: dict = None, image_url:
             err_msg = (getattr(e, 'message', None) or str(e)) or ''
             err_lower = err_msg.lower()
             logger.warning("FCM: token gönderilemedi: %s", err_msg)
-            # Geçersiz / silinmiş cihaz token'larını veritabanından kaldır (tekrar denemeyi durdur)
-            if 'notregistered' in err_lower or 'requested entity was not found' in err_lower:
+            # Geçersiz token'ları veritabanından kaldır: eski cihaz, farklı proje (SenderId mismatch) vb.
+            is_invalid = (
+                'notregistered' in err_lower
+                or 'requested entity was not found' in err_lower
+                or 'senderid mismatch' in err_lower
+                or 'mismatched-credential' in err_lower
+            )
+            if is_invalid:
                 deleted, _ = FCMDeviceToken.objects.filter(token=token).delete()
                 if deleted:
-                    logger.info("FCM: geçersiz token veritabanından silindi (user cihazı kaldırmış olabilir)")
+                    logger.info("FCM: geçersiz token silindi (cihaz kaldırıldı veya farklı proje ile alınmış olabilir)")
