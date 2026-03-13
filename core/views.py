@@ -8,6 +8,21 @@ from rest_framework.response import Response
 from .models import SiteConfiguration, SocialMediaLink, ContactMessage
 
 
+def _get_site_stats():
+    """Anasayfa sidebar için toplam soru, cevap, aktif kullanıcı sayıları. Hata durumunda None."""
+    try:
+        from django.contrib.auth import get_user_model
+        from questions.models import Question
+        from answers.models import Answer
+        User = get_user_model()
+        question_count = Question.objects.filter(moderation_status=1).exclude(status='draft').count()
+        answer_count = Answer.objects.filter(moderation_status=1, is_deleted=False).count()
+        user_count = User.objects.filter(is_active=True).count()
+        return {'question_count': question_count, 'answer_count': answer_count, 'user_count': user_count}
+    except Exception:
+        return None
+
+
 def _default_site_settings_response():
     """Migration uygulanmamışsa veya tablo boşsa döndürülecek varsayılan yanıt."""
     return Response({
@@ -84,6 +99,22 @@ def submit_contact_message(request):
             status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     return Response({'detail': 'Mesajınız alındı, en kısa sürede size dönüş yapacağız.'}, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def site_stats(request):
+    """
+    Anasayfa sidebar için site istatistikleri (soru, cevap, kullanıcı sayısı). Public, cache'lenebilir.
+    """
+    data = cache.get('core_site_stats')
+    if data is None:
+        data = _get_site_stats()
+        if data is not None:
+            cache.set('core_site_stats', data, timeout=300)  # 5 dakika
+    if data is None:
+        data = {'question_count': 0, 'answer_count': 0, 'user_count': 0}
+    return Response(data)
 
 
 @api_view(['GET'])
