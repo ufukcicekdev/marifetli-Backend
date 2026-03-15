@@ -1,21 +1,27 @@
 from rest_framework import serializers
 from django.core.files.base import ContentFile
-from .models import Design
+from .models import Design, DesignImage
 from .services import add_watermark_to_image
 import uuid
 import os
 
 
-class DesignUploadSerializer(serializers.ModelSerializer):
-    file = serializers.ImageField(write_only=True, required=True)
+def _image_url(request, image_field):
+    if not image_field:
+        return None
+    if request:
+        return request.build_absolute_uri(image_field.url)
+    return image_field.url
+
+
+class DesignUploadSerializer(serializers.Serializer):
+    """Çoklu görsel yükleme: files context'te gönderilir."""
+
     license = serializers.ChoiceField(choices=[c[0] for c in Design._meta.get_field("license").choices], default="cc-by")
     add_watermark = serializers.BooleanField(default=True)
     tags = serializers.CharField(required=False, allow_blank=True, max_length=500)
+    description = serializers.CharField(required=False, allow_blank=True, max_length=2000)
     copyright_confirmed = serializers.BooleanField(required=True)
-
-    class Meta:
-        model = Design
-        fields = ["file", "license", "add_watermark", "tags", "copyright_confirmed"]
 
     def validate_copyright_confirmed(self, value):
         if not value:
@@ -23,58 +29,69 @@ class DesignUploadSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
-        file_obj = validated_data.pop("file")
+        files = self.context.get("files") or []
+        if not files:
+            raise serializers.ValidationError({"files": "En az bir görsel yükleyin."})
         add_watermark = validated_data.pop("add_watermark", True)
         author = self.context["request"].user
 
-        if add_watermark:
-            bytes_data, content_type = add_watermark_to_image(
-                file_obj,
-                format_from_name=(os.path.splitext(getattr(file_obj, "name", ""))[1] or ".png").lstrip(".").upper() or "PNG",
-            )
-            if bytes_data:
-                name = f"{uuid.uuid4().hex}.png"
-                validated_data["image"] = ContentFile(bytes_data, name=name)
+        design = Design.objects.create(author=author, add_watermark=add_watermark, **validated_data)
+        for order, file_obj in enumerate(files):
+            if add_watermark:
+                bytes_data, _ = add_watermark_to_image(
+                    file_obj,
+                    format_from_name=(os.path.splitext(getattr(file_obj, "name", ""))[1] or ".png").lstrip(".").upper() or "PNG",
+                )
+                if bytes_data:
+                    name = f"{uuid.uuid4().hex}.png"
+                    DesignImage.objects.create(design=design, image=ContentFile(bytes_data, name=name), order=order)
+                else:
+                    DesignImage.objects.create(design=design, image=file_obj, order=order)
             else:
-                validated_data["image"] = file_obj
-        else:
-            validated_data["image"] = file_obj
-
-        return Design.objects.create(author=author, **validated_data)
+                DesignImage.objects.create(design=design, image=file_obj, order=order)
+        return design
 
 
 class DesignSerializer(serializers.ModelSerializer):
-    """Liste/detay için read-only."""
+    """Liste/detay için read-only; image_urls slider için."""
 
     image_url = serializers.SerializerMethodField()
+    image_urls = serializers.SerializerMethodField()
     author_username = serializers.SerializerMethodField()
 
     class Meta:
         model = Design
         fields = [
-            "id", "image", "image_url", "license", "add_watermark", "tags",
+            "id", "image_url", "image_urls", "license", "add_watermark", "tags", "description",
             "created_at", "author_username",
         ]
         read_only_fields = fields
 
     def get_image_url(self, obj):
+        imgs = list(obj.design_images.order_by("order"))
+        if imgs and imgs[0].image:
+            return _image_url(self.context.get("request"), imgs[0].image)
+        return _image_url(self.context.get("request"), obj.image)
+
+    def get_image_urls(self, obj):
+        request = self.context.get("request")
+        imgs = list(obj.design_images.order_by("order"))
+        if imgs:
+            return [_image_url(request, im.image) for im in imgs if im.image]
         if obj.image:
-            request = self.context.get("request")
-            if request:
-                return request.build_absolute_uri(obj.image.url)
-            return obj.image.url
-        return None
+            return [_image_url(request, obj.image)]
+        return []
 
     def get_author_username(self, obj):
         return obj.author.username if obj.author_id else None
 
 
 class DesignUpdateSerializer(serializers.ModelSerializer):
-    """Sahip tasarımı günceller (license, tags)."""
+    """Sahip tasarımı günceller (license, tags, description)."""
 
     class Meta:
         model = Design
-        fields = ["license", "tags"]
+        fields = ["license", "tags", "description"]
 
     def validate_license(self, value):
         if value not in dict(Design._meta.get_field("license").choices):

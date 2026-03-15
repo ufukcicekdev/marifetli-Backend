@@ -20,7 +20,7 @@ class DesignListView(generics.ListAPIView):
     serializer_class = DesignSerializer
 
     def get_queryset(self):
-        qs = Design.objects.select_related("author").order_by("-created_at")
+        qs = Design.objects.select_related("author").prefetch_related("design_images").order_by("-created_at")
         author = self.request.query_params.get("author", "").strip()
         if author:
             qs = qs.filter(author__username__iexact=author)
@@ -36,7 +36,8 @@ class DesignUploadView(generics.CreateAPIView):
     serializer_class = DesignUploadSerializer
 
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
+        files = request.FILES.getlist("files") or request.FILES.getlist("file")
+        serializer = self.get_serializer(data=request.data, context={"request": request, "files": files})
         serializer.is_valid(raise_exception=True)
         design = serializer.save()
         read_serializer = DesignSerializer(design, context={"request": request})
@@ -49,13 +50,13 @@ class MyDesignsListView(generics.ListAPIView):
     serializer_class = DesignSerializer
 
     def get_queryset(self):
-        return Design.objects.filter(author=self.request.user).select_related("author").order_by("-created_at")
+        return Design.objects.filter(author=self.request.user).select_related("author").prefetch_related("design_images").order_by("-created_at")
 
 
 class DesignDetailView(generics.RetrieveUpdateDestroyAPIView):
     """GET: herkese açık. PATCH/DELETE: sadece sahibi (license, tags güncelleme veya silme)."""
     serializer_class = DesignSerializer
-    queryset = Design.objects.select_related("author").all()
+    queryset = Design.objects.select_related("author").prefetch_related("design_images").all()
 
     def get_permissions(self):
         if self.request.method in ("PATCH", "DELETE"):
