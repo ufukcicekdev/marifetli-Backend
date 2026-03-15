@@ -66,6 +66,7 @@ INSTALLED_APPS = [
     "emails",
     "blog",
     "communities",
+    "designs",
     "logs",
     "search_console",
 ]
