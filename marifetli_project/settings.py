@@ -69,6 +69,7 @@ INSTALLED_APPS = [
     "designs",
     "logs",
     "search_console",
+    "bot_activity",
 ]
 
 MIDDLEWARE = [
@@ -113,6 +114,7 @@ JAZZMIN_SETTINGS = {
     "search_model": ["users.user", "questions.question"],
     "topmenu_links": [
         {"name": "Ana Sayfa", "url": "admin:index"},
+        {"name": "Bot Aktivite", "url": "/admin/bot-activity/"},
     ],
     "show_sidebar": True,
     "navigation_expanded": True,
@@ -434,6 +436,12 @@ MODERATION_LLM_PROMPT = config(
     "MODERATION_LLM_PROMPT",
     default="Sen marifetli.com.tr topluluk moderatörüsün. Sana gelen metinleri sadece küfür, hakaret, cinsellik ve siyasi tartışma açısından incele. Eğer uygunsuzsa sadece 'RED' yaz. Eğer içerik temizse sadece 'ONAY' yaz. Başka hiçbir açıklama yapma.",
 ).strip()
+# Bot kullanıcılar (soru/cevap otomasyonu). Config'ten açılıp kapatılır.
+BOT_USERS_ENABLED = config("BOT_USERS_ENABLED", default=False, cast=bool)
+GEMINI_API_KEY = config("GEMINI_API_KEY", default="").strip()  # Bot içerik üretimi için
+# Celery Beat her tetiklediğinde bu kadar soru üretilir (1–20). Günde toplam = BOT_QUESTIONS_PER_RUN × Beat'teki çalışma sayısı (örn. 6 × 5 = 30 soru/gün).
+BOT_QUESTIONS_PER_RUN = config("BOT_QUESTIONS_PER_RUN", default=5, cast=int)
+
 # Celery - background task kuyruğu (Redis broker). REDIS_URL varsa aynı Redis kullanılır.
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default=REDIS_URL or "")
 CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default=CELERY_BROKER_URL)
@@ -441,11 +449,15 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_TIMEZONE = "Europe/Istanbul"
 
-# Celery Beat - periyodik görevler (sitemap'leri GSC API ile submit, günde 3 kez)
+# Celery Beat - periyodik görevler (sitemap'leri GSC API ile submit, günde 3 kez; bot aktivite günde 6 kez)
 CELERY_BEAT_SCHEDULE = {
     "submit-sitemaps-gsc": {
         "task": "search_console.submit_sitemaps_gsc",
         "schedule": crontab(hour="8,14,20", minute=0),  # 08:00, 14:00, 20:00
+    },
+    "bot-activity-run": {
+        "task": "bot_activity.run_bot_activity",
+        "schedule": crontab(minute=15, hour="*/4"),  # 00:15, 04:15, 08:15, 12:15, 16:15, 20:15 → günde 6 tur
     },
 }
 
@@ -469,6 +481,7 @@ LOGGING = {
         "moderation": {"level": "INFO", "handlers": ["console"], "propagate": False},
         "cronjobs": {"level": "INFO", "handlers": ["console"], "propagate": False},
         "search_console": {"level": "INFO", "handlers": ["console"], "propagate": False},
+        "bot_activity": {"level": "INFO", "handlers": ["console"], "propagate": False},
     },
 }
 if LOG_DIR:
@@ -479,7 +492,7 @@ if LOG_DIR:
         "formatter": "verbose",
     }
     LOGGING["root"]["handlers"].append("file")
-    for name in ("moderation", "cronjobs", "search_console"):
+    for name in ("moderation", "cronjobs", "search_console", "bot_activity"):
         if name in LOGGING["loggers"] and "file" not in LOGGING["loggers"][name]["handlers"]:
             LOGGING["loggers"][name]["handlers"].append("file")
 if LOG_TO_DB:
@@ -488,6 +501,6 @@ if LOG_TO_DB:
         "formatter": "verbose",
         "source": "",
     }
-    for name in ("moderation", "cronjobs", "search_console"):
+    for name in ("moderation", "cronjobs", "search_console", "bot_activity"):
         if name in LOGGING["loggers"] and "db" not in LOGGING["loggers"][name]["handlers"]:
             LOGGING["loggers"][name]["handlers"].append("db")

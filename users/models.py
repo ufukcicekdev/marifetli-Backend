@@ -22,6 +22,10 @@ class User(AbstractUser):
     password_reset_token = models.CharField(max_length=100, null=True, blank=True)
     password_reset_token_expiry = models.DateTimeField(null=True, blank=True)
     two_fa_enabled = models.BooleanField(default=False)
+    is_bot = models.BooleanField(
+        default=False,
+        help_text="Bu kullanıcı yapay zeka botudur; soru/cevap otomasyonu için kullanılır.",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

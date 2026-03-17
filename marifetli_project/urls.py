@@ -52,6 +52,7 @@ urlpatterns = [
     path('api/favorites/', include('favorites.urls')),
     path('api/designs/', include('designs.urls')),
     path('api/emails/', include('emails.urls')),
+    path('admin/bot-activity/', include('bot_activity.urls')),
     path('api-auth/', include('rest_framework.urls')),
 ]
 

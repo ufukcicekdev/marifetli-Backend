@@ -1,0 +1,79 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bot Aktivite Yönetimi – Marifetli</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+        h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+        .back { margin-bottom: 1.5rem; }
+        .back a { color: #0d6efd; text-decoration: none; }
+        .back a:hover { text-decoration: underline; }
+        .card { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+        .card h2 { font-size: 1.1rem; margin: 0 0 0.75rem 0; }
+        .status { margin-bottom: 1rem; }
+        .status.on { color: #198754; }
+        .status.off { color: #dc3545; }
+        form { margin-bottom: 0.75rem; }
+        button, .btn { display: inline-block; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; font-size: 1rem; border: none; }
+        button.primary, .btn.primary { background: #0d6efd; color: #fff; }
+        button.primary:hover, .btn.primary:hover { background: #0b5ed7; }
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        input[type="number"] { width: 4rem; padding: 0.35rem; margin-left: 0.25rem; }
+        .messages { margin-bottom: 1rem; }
+        .messages li { list-style: none; padding: 0.5rem; border-radius: 6px; margin-bottom: 0.5rem; }
+        .messages .success { background: #d1e7dd; color: #0f5132; }
+        .messages .error { background: #f8d7da; color: #842029; }
+    </style>
+</head>
+<body>
+    <div class="back"><a href="{% url 'admin:index' %}">← Admin panele dön</a></div>
+    <h1>Bot Aktivite Yönetimi</h1>
+    <p>Bu sayfa sadece staff kullanıcılar içindir. Bot kullanıcıları oluşturabilir ve soru/cevap aktivitesi tetikleyebilirsiniz.</p>
+
+    <div class="status {% if config_enabled and has_api_key %}on{% else %}off{% endif %}">
+        {% if config_enabled and has_api_key %}
+            Bot özelliği <strong>açık</strong> (BOT_USERS_ENABLED=True, GEMINI_API_KEY tanımlı).
+        {% else %}
+            Bot özelliği <strong>kapalı</strong>. Açmak için .env dosyasında BOT_USERS_ENABLED=True ve GEMINI_API_KEY tanımlayın.
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h2>Durum</h2>
+        <p>Toplam bot kullanıcı: <strong>{{ bot_count }}</strong></p>
+    </div>
+
+    {% if messages %}
+    <ul class="messages">
+        {% for message in messages %}
+        <li class="{{ message.tags }}">{{ message }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    <div class="card">
+        <h2>100 Bot Kullanıcı Oluştur</h2>
+        <p>50 kadın ve 50 erkek bot kullanıcı oluşturur. Zaten varsa eksik sayı kadar ekler.</p>
+        <form method="post" action="">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="create_bots">
+            <button type="submit" class="primary" {% if not can_run %}disabled{% endif %}>Bot kullanıcıları oluştur</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Aktivite döngüsü çalıştır</h2>
+        <p>Botlar kategorilerden rastgele soru açar ve diğer botlar cevap/yorum yazar. Bir turda oluşturulacak soru sayısını seçin.</p>
+        <form method="post" action="">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="run_activity">
+            <label for="questions">Soru sayısı (1–20):</label>
+            <input type="number" id="questions" name="questions" value="5" min="1" max="20">
+            <button type="submit" class="primary" {% if not can_run %}disabled{% endif %}>Aktivite çalıştır</button>
+        </form>
+    </div>
+</body>
+</html>
