@@ -17,5 +17,9 @@ BOT_MALE_FIRST_NAMES = [
     "Alperen", "Aras", "Kağan", "Tuna", "Bartu", "Çağan", "Kutay", "Sarp", "Toprak", "Umut",
 ]
 
-# Soyisim benzeri ekler (bot için çeşitlilik; gerçek soyisim kullanmıyoruz, sadece username'de)
-BOT_USERNAME_SUFFIXES = list(range(1, 101))  # 1..100
+# Username'de kullanılacak ikinci parça (isim + bunlardan biri = eladeniz, barskaya gibi doğal görünsün)
+BOT_USERNAME_SECOND = [
+    "deniz", "kaya", "yildiz", "arslan", "yilmaz", "demir", "celik", "ozturk", "kaya", "aslan",
+    "polat", "kurt", "aydin", "sahin", "kilic", "cetin", "alkan", "gunes", "yilmaz", "koç",
+    "tek", "karaca", "acar", "ozkan", "ergun", "tuna", "efe", "can", "alp", "ece",
+]

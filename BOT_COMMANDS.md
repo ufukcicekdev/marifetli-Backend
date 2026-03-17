@@ -19,9 +19,14 @@ BOT_USERS_ENABLED=False
 # Gemini API anahtarı (Google AI Studio’dan alınır)
 GEMINI_API_KEY=
 
+# Opsiyonel: Model adı (404 alıyorsan gemini-1.5-flash-latest dene)
+# GEMINI_MODEL=gemini-2.0-flash
+
 # Her Celery turunda kaç soru üretilsin (1–20). Günde ~6 tur → 6 × bu değer soru.
 BOT_QUESTIONS_PER_RUN=5
 ```
+
+**Bot kullanıcı adları:** Artık `bot_` öneki yok (örn. `bars_16`, `ela_38`). Eski `bot_xxx` hesaplar aynen kalır; sadece yeni oluşturulan botlar yeni formatta.
 
 ---
 

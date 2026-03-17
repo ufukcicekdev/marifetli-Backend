@@ -441,6 +441,7 @@ MODERATION_LLM_PROMPT = config(
 # Bot kullanıcılar (soru/cevap otomasyonu). Config'ten açılıp kapatılır.
 BOT_USERS_ENABLED = config("BOT_USERS_ENABLED", default=False, cast=bool)
 GEMINI_API_KEY = config("GEMINI_API_KEY", default="").strip()  # Bot içerik üretimi için
+GEMINI_MODEL = config("GEMINI_MODEL", default="gemini-2.0-flash").strip()  # 404 alıyorsan gemini-1.5-flash-latest dene
 # Celery Beat her tetiklediğinde bu kadar soru üretilir (1–20). Günde toplam = BOT_QUESTIONS_PER_RUN × Beat'teki çalışma sayısı (örn. 6 × 5 = 30 soru/gün).
 BOT_QUESTIONS_PER_RUN = config("BOT_QUESTIONS_PER_RUN", default=5, cast=int)
 

@@ -15,7 +15,7 @@ from answers.models import Answer
 from users.models import UserProfile
 
 from .gemini_client import generate_question_for_category, generate_answer_for_question
-from .names import BOT_FEMALE_FIRST_NAMES, BOT_MALE_FIRST_NAMES
+from .names import BOT_FEMALE_FIRST_NAMES, BOT_MALE_FIRST_NAMES, BOT_USERNAME_SECOND
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -26,6 +26,21 @@ BOT_PASSWORD = "bot_internal_never_login"  # Botlar giriş yapmaz
 
 def is_bot_enabled():
     return getattr(settings, "BOT_USERS_ENABLED", False) and getattr(settings, "GEMINI_API_KEY", "")
+
+
+def _make_bot_username(base: str) -> str:
+    """İnsan gibi görünen benzersiz username: eladeniz, barskaya, sevgiyildiz vb."""
+    candidates = [f"{base}{s}" for s in BOT_USERNAME_SECOND]
+    random.shuffle(candidates)
+    for username in candidates:
+        if not User.objects.filter(username=username).exists():
+            return username
+    # Çakışma olursa isim + 2 rastgele rakam (ela42 gibi)
+    for _ in range(50):
+        u = f"{base}{random.randint(10, 99)}"
+        if not User.objects.filter(username=u).exists():
+            return u
+    return f"{base}{random.randint(100, 999)}"
 
 
 def create_bot_users(count=100):
@@ -48,9 +63,7 @@ def create_bot_users(count=100):
         if User.objects.filter(is_bot=True).count() >= count:
             break
         base = slugify(first_name).replace("-", "") or "kadin"
-        username = f"bot_{base}_{i + 1}"
-        if User.objects.filter(username=username).exists():
-            continue
+        username = _make_bot_username(base)
         email = f"bot.{username}@{BOT_EMAIL_DOMAIN}"
         if User.objects.filter(email=email).exists():
             continue
@@ -73,9 +86,7 @@ def create_bot_users(count=100):
         if User.objects.filter(is_bot=True).count() >= count:
             break
         base = slugify(first_name).replace("-", "") or "erkek"
-        username = f"bot_{base}_{i + 1}"
-        if User.objects.filter(username=username).exists():
-            continue
+        username = _make_bot_username(base)
         email = f"bot.{username}@{BOT_EMAIL_DOMAIN}"
         if User.objects.filter(email=email).exists():
             continue
