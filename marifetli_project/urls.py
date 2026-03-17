@@ -38,6 +38,7 @@ urlpatterns = [
     path('sitemap-static.xml', search_console_views.sitemap_static),
     path('sitemap-questions.xml', search_console_views.sitemap_questions),
     path('sitemap-blog.xml', search_console_views.sitemap_blog),
+    path('admin/bot-activity/', include('bot_activity.urls')),
     path('admin/', admin.site.urls),
     path('api/', include('core.urls')),
     path('api/auth/', include('users.urls')),
@@ -52,7 +53,6 @@ urlpatterns = [
     path('api/favorites/', include('favorites.urls')),
     path('api/designs/', include('designs.urls')),
     path('api/emails/', include('emails.urls')),
-    path('admin/bot-activity/', include('bot_activity.urls')),
     path('api-auth/', include('rest_framework.urls')),
 ]
 

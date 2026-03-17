@@ -129,6 +129,8 @@ JAZZMIN_SETTINGS = {
         "answers": "fas fa-reply",
         "categories": "fas fa-folder",
         "favorites": "fas fa-bookmark",
+        "bot_activity": "fas fa-robot",
+        "bot_activitybotyonetimi": "fas fa-cogs",
     },
     "default_icon_parents": "fas fa-chevron-circle-right",
     "default_icon_children": "fas fa-circle",
