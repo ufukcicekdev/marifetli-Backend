@@ -28,6 +28,9 @@ class SiteConfiguration(models.Model):
     maintenance_message = models.TextField(blank=True)
     google_analytics_id = models.CharField(max_length=50, blank=True, help_text='GA4 Ölçüm ID (G-XXXXXXXXXX)')
     google_search_console_meta = models.CharField(max_length=255, blank=True, help_text='Google Search Console doğrulama meta content değeri')
+    primary_color = models.CharField(max_length=7, blank=True, help_text='Vurgu rengi (hex, örn: #e85d04). Boşsa varsayılan canlı turuncu kullanılır.')
+    about_summary = models.TextField(blank=True, help_text='Hakkımızda kısa özet (anasayfa sidebar ve önizleme).')
+    about_content = models.TextField(blank=True, help_text='Hakkımızda sayfası tam metni. Satır sonları korunur.')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

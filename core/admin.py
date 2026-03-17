@@ -11,10 +11,21 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
             'fields': ('logo', 'favicon'),
             'description': 'Site logosu (header) ve tarayıcı sekmesi ikonu (favicon).',
         }),
+        ('Hakkımızda', {
+            'fields': ('about_summary', 'about_content'),
+            'description': 'about_summary: Anasayfa sidebar ve önizlemede gösterilir. about_content: /hakkimizda sayfasının tam metni.',
+        }),
         ('İletişim', {'fields': ('contact_email', 'contact_phone', 'contact_address', 'contact_description')}),
         ('Google Analytics & Search Console', {
             'fields': ('google_analytics_id', 'google_search_console_meta'),
             'description': 'Google Analytics (GA4) Ölçüm ID ve Search Console doğrulama meta değeri.',
+        }),
+        ('Tema', {
+            'fields': ('primary_color',),
+            'description': (
+                'Vurgu rengi (hex, örn: #e85d04). Boş bırakılırsa varsayılan canlı turuncu kullanılır. '
+                'Örnekler: #e85d04 Turuncu, #0d9488 Teal, #2563eb Mavi, #dc2626 Kırmızı, #16a34a Yeşil, #9333ea Mor, #d97706 Amber.'
+            ),
         }),
         ('Bakım', {'fields': ('is_maintenance_mode', 'maintenance_message')}),
     )

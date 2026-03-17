@@ -32,6 +32,9 @@ def _default_site_settings_response():
         'google_search_console_meta': '',
         'logo_url': None,
         'favicon_url': None,
+        'primary_color': None,
+        'about_summary': '',
+        'about_content': '',
     })
 
 
@@ -58,6 +61,11 @@ def public_site_settings(request):
         logo_url = request.build_absolute_uri(config.logo.url)
     if getattr(config, 'favicon', None) and config.favicon:
         favicon_url = request.build_absolute_uri(config.favicon.url)
+    primary_color = (getattr(config, 'primary_color', None) or '').strip() or None
+    if primary_color and not primary_color.startswith('#'):
+        primary_color = '#' + primary_color
+    about_summary = getattr(config, 'about_summary', None) or ''
+    about_content = getattr(config, 'about_content', None) or ''
     return Response({
         'contact': {
             'email': config.contact_email or '',
@@ -70,6 +78,9 @@ def public_site_settings(request):
         'google_search_console_meta': config.google_search_console_meta or '',
         'logo_url': logo_url,
         'favicon_url': favicon_url,
+        'primary_color': primary_color if primary_color and len(primary_color) >= 4 else None,
+        'about_summary': about_summary,
+        'about_content': about_content,
     })
 
 
