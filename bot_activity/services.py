@@ -160,6 +160,7 @@ def run_activity_cycle(questions_per_cycle=5, answers_per_question=(2, 5)):
         content = (data.get("content") or "")[:5000]
 
         slug = _unique_slug(title, existing_slugs)
+        # Bot sorularına rastgele görüntülenme ve beğeni (doğal görünsün)
         q = Question.objects.create(
             title=title,
             slug=slug,
@@ -169,8 +170,8 @@ def run_activity_cycle(questions_per_cycle=5, answers_per_question=(2, 5)):
             category=category,
             status="open",
             moderation_status=1,  # Bot içeriği doğrudan onaylı
-            view_count=0,
-            like_count=0,
+            view_count=random.randint(15, 280),
+            like_count=random.randint(0, 35),
             answer_count=0,
         )
         questions_created += 1

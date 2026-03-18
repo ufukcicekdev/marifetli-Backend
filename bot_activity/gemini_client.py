@@ -246,10 +246,8 @@ Yanıtında SADECE aşağıdaki JSON'u döndür, başka metin veya açıklama ya
         # Önce tam eşleşme: "key": "değer"
         m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', s)
         if m:
-            try:
-                return m.group(1).encode().decode("unicode_escape").strip()
-            except Exception:
-                return m.group(1).strip()
+            # API UTF-8 döndürüyor; .encode().decode("unicode_escape") Türkçe karakterleri bozuyordu
+            return m.group(1).strip()
         # Kesilmiş (kapanış " yok): "key": "değer... (sonda
         m2 = re.search(rf'"{key}"\s*:\s*"(.+)$', s, re.DOTALL)
         if m2:
@@ -298,5 +296,5 @@ Sadece cevap metnini yaz, tırnak veya başlık ekleme.
 
 {context}
 """
-    raw = _call_gemini(prompt, max_tokens=250)
+    raw = _call_gemini(prompt, max_tokens=600)
     return (raw or "Teşekkürler, güzel paylaşım.")[:5000]
