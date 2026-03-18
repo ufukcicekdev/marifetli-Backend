@@ -37,6 +37,8 @@ def _default_site_settings_response():
         'about_content': '',
         'auth_modal_headline': 'Sevdiğin el işlerini keşfet.',
         'auth_modal_description': 'Örgü, dikiş, nakış ve el sanatları topluluğunda soru sor, deneyimlerini paylaş.',
+        'font_body': None,
+        'font_heading': None,
     })
 
 
@@ -68,6 +70,8 @@ def public_site_settings(request):
         primary_color = '#' + primary_color
     about_summary = getattr(config, 'about_summary', None) or ''
     about_content = getattr(config, 'about_content', None) or ''
+    font_body = (getattr(config, 'font_body', None) or '').strip() or None
+    font_heading = (getattr(config, 'font_heading', None) or '').strip() or None
     return Response({
         'contact': {
             'email': config.contact_email or '',
@@ -85,6 +89,8 @@ def public_site_settings(request):
         'about_content': about_content,
         'auth_modal_headline': (getattr(config, 'auth_modal_headline', None) or '').strip() or 'Sevdiğin el işlerini keşfet.',
         'auth_modal_description': (getattr(config, 'auth_modal_description', None) or '').strip() or 'Örgü, dikiş, nakış ve el sanatları topluluğunda soru sor, deneyimlerini paylaş.',
+        'font_body': font_body,
+        'font_heading': font_heading,
     })
 
 

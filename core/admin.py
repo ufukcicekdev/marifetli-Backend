@@ -25,10 +25,10 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
             'description': 'Google Analytics (GA4) Ölçüm ID ve Search Console doğrulama meta değeri.',
         }),
         ('Tema', {
-            'fields': ('primary_color',),
+            'fields': ('primary_color', 'font_body', 'font_heading'),
             'description': (
-                'Vurgu rengi (hex, örn: #e85d04). Boş bırakılırsa varsayılan canlı turuncu kullanılır. '
-                'Örnekler: #e85d04 Turuncu, #0d9488 Teal, #2563eb Mavi, #dc2626 Kırmızı, #16a34a Yeşil, #9333ea Mor, #d97706 Amber.'
+                'Vurgu rengi (hex). Yazı tipleri: Google Fonts ailesi adı (örn. Inter, Open Sans, Lora, Roboto, Outfit). '
+                'Boş bırakılırsa varsayılan font kullanılır. Başlık boşsa gövde fontu kullanılır.'
             ),
         }),
         ('Bakım', {'fields': ('is_maintenance_mode', 'maintenance_message')}),

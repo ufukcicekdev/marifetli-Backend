@@ -42,6 +42,19 @@ class SiteConfiguration(models.Model):
         default='Örgü, dikiş, nakış ve el sanatları topluluğunda soru sor, deneyimlerini paylaş.',
         help_text='Giriş/üye ol modalı sol panel açıklama metni.',
     )
+    # Yazı tipleri: Gövde okunaklı (Nunito), başlık marka (TT Octosquares). Boş = varsayılan.
+    font_body = models.CharField(
+        max_length=80,
+        blank=True,
+        default='Nunito',
+        help_text='Ana metin (gövde) yazı tipi. Varsayılan: Nunito. Diğer: Inter, Open Sans, Lora (Google Fonts).',
+    )
+    font_heading = models.CharField(
+        max_length=80,
+        blank=True,
+        default='TT Octosquares',
+        help_text='Başlık yazı tipi. Varsayılan: TT Octosquares. Boş bırakılırsa gövde yazı tipi kullanılır.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
