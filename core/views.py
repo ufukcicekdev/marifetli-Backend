@@ -35,6 +35,8 @@ def _default_site_settings_response():
         'primary_color': None,
         'about_summary': '',
         'about_content': '',
+        'auth_modal_headline': 'Sevdiğin el işlerini keşfet.',
+        'auth_modal_description': 'Örgü, dikiş, nakış ve el sanatları topluluğunda soru sor, deneyimlerini paylaş.',
     })
 
 
@@ -81,6 +83,8 @@ def public_site_settings(request):
         'primary_color': primary_color if primary_color and len(primary_color) >= 4 else None,
         'about_summary': about_summary,
         'about_content': about_content,
+        'auth_modal_headline': (getattr(config, 'auth_modal_headline', None) or '').strip() or 'Sevdiğin el işlerini keşfet.',
+        'auth_modal_description': (getattr(config, 'auth_modal_description', None) or '').strip() or 'Örgü, dikiş, nakış ve el sanatları topluluğunda soru sor, deneyimlerini paylaş.',
     })
 
 

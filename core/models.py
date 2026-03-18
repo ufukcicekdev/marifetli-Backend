@@ -31,6 +31,17 @@ class SiteConfiguration(models.Model):
     primary_color = models.CharField(max_length=7, blank=True, help_text='Vurgu rengi (hex, örn: #e85d04). Boşsa varsayılan canlı turuncu kullanılır.')
     about_summary = models.TextField(blank=True, help_text='Hakkımızda kısa özet (anasayfa sidebar ve önizleme).')
     about_content = models.TextField(blank=True, help_text='Hakkımızda sayfası tam metni. Satır sonları korunur.')
+    auth_modal_headline = models.CharField(
+        max_length=200,
+        blank=True,
+        default='Sevdiğin el işlerini keşfet.',
+        help_text='Giriş/üye ol modalı sol panel başlığı.',
+    )
+    auth_modal_description = models.TextField(
+        blank=True,
+        default='Örgü, dikiş, nakış ve el sanatları topluluğunda soru sor, deneyimlerini paylaş.',
+        help_text='Giriş/üye ol modalı sol panel açıklama metni.',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

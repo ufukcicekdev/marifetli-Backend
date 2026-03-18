@@ -15,6 +15,10 @@ class SiteConfigurationAdmin(admin.ModelAdmin):
             'fields': ('about_summary', 'about_content'),
             'description': 'about_summary: Anasayfa sidebar ve önizlemede gösterilir. about_content: /hakkimizda sayfasının tam metni.',
         }),
+        ('Giriş modalı', {
+            'fields': ('auth_modal_headline', 'auth_modal_description'),
+            'description': 'Giriş/üye ol penceresinde sol tarafta görünen başlık ve açıklama metni.',
+        }),
         ('İletişim', {'fields': ('contact_email', 'contact_phone', 'contact_address', 'contact_description')}),
         ('Google Analytics & Search Console', {
             'fields': ('google_analytics_id', 'google_search_console_meta'),
