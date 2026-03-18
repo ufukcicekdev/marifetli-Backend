@@ -296,5 +296,5 @@ Sadece cevap metnini yaz, tırnak veya başlık ekleme.
 
 {context}
 """
-    raw = _call_gemini(prompt, max_tokens=600)
+    raw = _call_gemini(prompt, max_tokens=1000)
     return (raw or "Teşekkürler, güzel paylaşım.")[:5000]
