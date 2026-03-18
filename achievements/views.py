@@ -1,5 +1,7 @@
+from datetime import timedelta
+from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 from .models import AchievementCategory, UserAchievement, UserStreak
@@ -8,6 +10,23 @@ User = get_user_model()
 
 # Seri kademeleri sırayla: önce 5 gün, sonra 10, 20, ... (ilerleme sadece ilgili kademede gösterilir)
 STREAK_TIERS = [5, 10, 20, 30, 50, 100]
+
+# DB'de target_count null olan başarılar için varsayılan hedef (migration 0002'de set edilmemiş olabilir)
+CODE_TARGET_FALLBACK = {
+    'sharing_enthusiast': 5,
+    'question_expert_10': 10,
+    'question_expert_25': 25,
+    'question_expert_50': 50,
+    'question_master_100': 100,
+    'answer_expert_10': 10,
+    'answer_expert_25': 25,
+    'answer_expert_50': 50,
+    'answer_master_100': 100,
+    'reputation_100': 100,
+    'reputation_1000': 1000,
+    'popular_10': 10,
+    'first_community': 1,
+}
 
 
 def _get_user_from_username(username: str):
@@ -20,6 +39,8 @@ def _get_user_from_username(username: str):
 def _get_progress_for_achievement(user, a):
     """Başarı için mevcut ilerleme ve hedef döner (varsa)."""
     target = getattr(a, 'target_count', None)
+    if target is None:
+        target = CODE_TARGET_FALLBACK.get(a.code)
     if target is None:
         return None, None
     current = None
@@ -68,6 +89,21 @@ def _get_progress_for_achievement(user, a):
         from communities.models import Community
         current = Community.objects.filter(owner=user).count()
         t = target or 1
+        return min(current, t), t
+    # İtibar: 100 / 1000
+    if a.code in ('reputation_100', 'reputation_1000'):
+        from users.models import UserProfile
+        try:
+            profile = UserProfile.objects.get(user=user)
+            current = profile.reputation
+        except Exception:
+            current = 0
+        t = target or (1000 if a.code == 'reputation_1000' else 100)
+        return min(current, t), t
+    # Takipçi: 10
+    if a.code == 'popular_10':
+        current = getattr(user, 'followers_count', 0) or 0
+        t = target or 10
         return min(current, t), t
     return current, target
 
@@ -121,3 +157,32 @@ def user_achievements_by_username(request, username):
         })
 
     return Response(result)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def recent_unlock(request):
+    """
+    Giriş yapmış kullanıcının son 2 dakika içinde açtığı başarıyı döner.
+    Frontend "başarı açıldı" modalını göstermek için kullanır.
+    """
+    since = timezone.now() - timedelta(minutes=2)
+    ua = (
+        UserAchievement.objects.filter(user=request.user, unlocked_at__gte=since)
+        .select_related('achievement')
+        .order_by('-unlocked_at')
+        .first()
+    )
+    if not ua:
+        return Response({'unlocked': None})
+    ach = ua.achievement
+    return Response({
+        'unlocked': {
+            'id': ach.id,
+            'name': ach.name,
+            'description': ach.description or '',
+            'code': ach.code,
+            'icon': ach.icon or '🏆',
+            'unlocked_at': ua.unlocked_at.isoformat(),
+        },
+    })

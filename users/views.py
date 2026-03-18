@@ -74,6 +74,8 @@ class LoginView(generics.GenericAPIView):
             user = authenticate(request, username=email, password=password)
 
             if user:
+                from achievements.services import record_activity_and_check_streak
+                record_activity_and_check_streak(user)
                 refresh = RefreshToken.for_user(user)
                 return Response({
                     'refresh': str(refresh),
@@ -111,6 +113,8 @@ def oauth_success(request):
             )
             frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000")
             return redirect(f"{frontend_url}/auth/callback?error=not_authenticated")
+    from achievements.services import record_activity_and_check_streak
+    record_activity_and_check_streak(user)
     refresh = RefreshToken.for_user(user)
     access = str(refresh.access_token)
     refresh_str = str(refresh)
