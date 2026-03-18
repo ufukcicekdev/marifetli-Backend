@@ -170,8 +170,8 @@ def run_activity_cycle(questions_per_cycle=5, answers_per_question=(2, 5)):
             category=category,
             status="open",
             moderation_status=1,  # Bot içeriği doğrudan onaylı
-            view_count=random.randint(15, 280),
-            like_count=random.randint(0, 35),
+            view_count=random.randint(15, 450),
+            like_count=random.randint(0, 200),
             answer_count=0,
         )
         questions_created += 1
