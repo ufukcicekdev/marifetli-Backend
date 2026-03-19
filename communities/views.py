@@ -11,6 +11,7 @@ from .models import (
     CommunityMember,
     CommunityBan,
     CommunityJoinRequest,
+    CommunityDeletionLog,
     JOIN_TYPE_OPEN,
     JOIN_TYPE_APPROVAL,
     MEMBER_ROLE_MOD,
@@ -187,11 +188,43 @@ class CommunityLeaveView(APIView):
         community = get_object_or_404(Community, slug=slug)
         if community.owner_id == request.user.pk:
             return Response(
-                {'detail': 'Topluluk sahibi topluluktan ayrılamaz. Topluluğu silmek için destek ile iletişime geçin.'},
+                {
+                    'detail': 'Topluluk sahibi topluluktan ayrılamaz. Topluluğu kaldırmak için Yönet sekmesindeki kalıcı silme seçeneğini kullanın.',
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
         CommunityMember.objects.filter(user=request.user, community=community).delete()
         return Response({'member_count': community.members.count()})
+
+
+class CommunityDeleteView(APIView):
+    """Sadece topluluk sahibi: kalıcı silme. Sebep zorunlu, CommunityDeletionLog'a yazılır."""
+
+    permission_classes = [IsAuthenticated, IsVerified]
+
+    def post(self, request, slug):
+        community = get_object_or_404(Community, slug=slug)
+        if community.owner_id != request.user.pk:
+            return Response({'detail': 'Sadece topluluk sahibi silebilir.'}, status=status.HTTP_403_FORBIDDEN)
+        reason = (request.data.get('reason') or '').strip()
+        if len(reason) < 10:
+            return Response(
+                {'detail': 'Silme nedeni en az 10 karakter olmalıdır.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        member_count = community.members.count()
+        CommunityDeletionLog.objects.create(
+            slug=community.slug,
+            name=community.name,
+            category_name=community.category.name if community.category_id else '',
+            owner_username=community.owner.username,
+            owner_id=community.owner_id,
+            deleted_by=request.user,
+            reason=reason,
+            member_count=member_count,
+        )
+        community.delete()
+        return Response({'deleted': True}, status=status.HTTP_200_OK)
 
 
 class CommunityJoinRequestListView(generics.ListAPIView):

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Community, CommunityMember, CommunityBan, CommunityJoinRequest
+from .models import Community, CommunityMember, CommunityBan, CommunityJoinRequest, CommunityDeletionLog
 
 
 @admin.register(Community)
@@ -30,3 +30,12 @@ class CommunityJoinRequestAdmin(admin.ModelAdmin):
     list_display = ('user', 'community', 'status', 'reviewed_by', 'created_at')
     list_filter = ('community', 'status')
     raw_id_fields = ('user', 'community', 'reviewed_by')
+
+
+@admin.register(CommunityDeletionLog)
+class CommunityDeletionLogAdmin(admin.ModelAdmin):
+    list_display = ('name', 'slug', 'owner_username', 'deleted_by', 'member_count', 'created_at')
+    list_filter = ('created_at',)
+    search_fields = ('name', 'slug', 'reason', 'owner_username')
+    readonly_fields = ('slug', 'name', 'category_name', 'owner_username', 'owner_id', 'deleted_by', 'reason', 'member_count', 'created_at')
+    raw_id_fields = ('deleted_by',)

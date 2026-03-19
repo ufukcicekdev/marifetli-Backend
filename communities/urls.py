@@ -10,6 +10,7 @@ urlpatterns = [
     path('<slug:slug>/update/', views.CommunityUpdateView.as_view()),
     path('<slug:slug>/join/', views.CommunityJoinView.as_view()),
     path('<slug:slug>/leave/', views.CommunityLeaveView.as_view()),
+    path('<slug:slug>/delete/', views.CommunityDeleteView.as_view()),
     path('<slug:slug>/questions/', views.CommunityQuestionsView.as_view()),
     path('<slug:slug>/questions/remove/', views.CommunityRemoveQuestionView.as_view()),
     path('<slug:slug>/join-requests/', views.CommunityJoinRequestListView.as_view()),

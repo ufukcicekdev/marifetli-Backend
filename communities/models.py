@@ -91,6 +91,35 @@ class Community(models.Model):
         return self.members.filter(user=user, role=MEMBER_ROLE_MOD).exists()
 
 
+class CommunityDeletionLog(models.Model):
+    """Topluluk silindiğinde denetim kaydı (geri yükleme yok; sorular community FK SET_NULL kalır)."""
+
+    slug = models.SlugField('Eski slug', max_length=120, db_index=True)
+    name = models.CharField('Eski ad', max_length=100)
+    category_name = models.CharField('Kategori adı', max_length=200, blank=True)
+    owner_username = models.CharField('Sahip kullanıcı adı', max_length=150, blank=True)
+    owner_id = models.PositiveIntegerField('Sahip kullanıcı id', null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='community_deletions_performed',
+        verbose_name='Silen',
+    )
+    reason = models.TextField('Silme nedeni')
+    member_count = models.PositiveIntegerField('Üye sayısı (silinmeden önce)', default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Topluluk silme kaydı'
+        verbose_name_plural = 'Topluluk silme kayıtları'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.name} ({self.slug}) silindi'
+
+
 class CommunityMember(models.Model):
     """Topluluğa katılan kullanıcı. role: member veya mod (sahip community.owner)."""
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='community_memberships')

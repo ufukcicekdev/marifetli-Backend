@@ -11,6 +11,8 @@ class CommunityListSerializer(serializers.ModelSerializer):
     owner_username = serializers.CharField(source='owner.username', read_only=True)
     member_count = serializers.SerializerMethodField()
     is_member = serializers.SerializerMethodField()
+    is_mod_or_owner = serializers.SerializerMethodField()
+    is_owner = serializers.SerializerMethodField()
     avatar_url = serializers.SerializerMethodField()
     cover_image_url = serializers.SerializerMethodField()
     join_type = serializers.CharField(read_only=True)
@@ -19,7 +21,7 @@ class CommunityListSerializer(serializers.ModelSerializer):
         model = Community
         fields = [
             'id', 'name', 'slug', 'description', 'category', 'category_name', 'category_slug',
-            'owner', 'owner_username', 'member_count', 'is_member',
+            'owner', 'owner_username', 'member_count', 'is_member', 'is_mod_or_owner', 'is_owner',
             'avatar', 'cover_image', 'avatar_url', 'cover_image_url', 'rules', 'join_type',
             'created_at',
         ]
@@ -32,6 +34,16 @@ class CommunityListSerializer(serializers.ModelSerializer):
         if not request or not request.user.is_authenticated:
             return False
         return CommunityMember.objects.filter(community=obj, user=request.user).exists()
+
+    def get_is_mod_or_owner(self, obj):
+        request = self.context.get('request')
+        return obj.is_mod_or_owner(request.user) if request and request.user.is_authenticated else False
+
+    def get_is_owner(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        return obj.owner_id == request.user.pk
 
     def _get_media_url(self, request, file_field):
         if not file_field:
@@ -93,10 +105,9 @@ class CommunityCreateSerializer(serializers.ModelSerializer):
 class CommunityDetailSerializer(CommunityListSerializer):
     join_request_pending = serializers.SerializerMethodField()
     is_banned = serializers.SerializerMethodField()
-    is_mod_or_owner = serializers.SerializerMethodField()
 
     class Meta(CommunityListSerializer.Meta):
-        fields = list(CommunityListSerializer.Meta.fields) + ['join_request_pending', 'is_banned', 'is_mod_or_owner']
+        fields = list(CommunityListSerializer.Meta.fields) + ['join_request_pending', 'is_banned']
 
     def get_join_request_pending(self, obj):
         request = self.context.get('request')
@@ -111,7 +122,3 @@ class CommunityDetailSerializer(CommunityListSerializer):
         if not request or not request.user.is_authenticated:
             return False
         return CommunityBan.objects.filter(community=obj, user=request.user).exists()
-
-    def get_is_mod_or_owner(self, obj):
-        request = self.context.get('request')
-        return obj.is_mod_or_owner(request.user) if request and request.user.is_authenticated else False
