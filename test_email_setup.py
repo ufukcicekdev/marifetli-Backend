@@ -99,7 +99,7 @@ def test_send_test_email(recipient=None):
             <p style="text-align: center;"><span class="badge">✓ Bağlantı başarılı</span></p>
             <p>Doğrulama, şifre sıfırlama ve hoş geldin mailleri de aynı sistem üzerinden gönderilecektir.</p>
             <div class="footer">
-                <p>Marifetli - El İşi & El Sanatları Topluluğu</p>
+                <p>Marifetli - İlgi Alanları Topluluğu</p>
                 <p>© 2026 Marifetli. Tüm hakları saklıdır.</p>
             </div>
         </div>
