@@ -66,7 +66,9 @@ def _should_send_push(recipient, notification_type: str) -> bool:
         return False
     if notification_type == 'answer' and not _should_send(recipient, 'notify_on_answer'):
         return False
-    if notification_type in ('like_question', 'like_answer') and not _should_send(recipient, 'notify_on_like'):
+    if notification_type == 'comment_design' and not _should_send(recipient, 'notify_on_answer'):
+        return False
+    if notification_type in ('like_question', 'like_answer', 'like_design') and not _should_send(recipient, 'notify_on_like'):
         return False
     if notification_type == 'follow' and not _should_send(recipient, 'notify_on_follow'):
         return False
@@ -75,7 +77,24 @@ def _should_send_push(recipient, notification_type: str) -> bool:
     return True
 
 
-def create_notification(recipient, sender, notification_type: str, message: str, *, question=None, answer=None, community=None):
+def _should_send_email(recipient, notification_type: str) -> bool:
+    """E-posta gönderilsin mi? (email_notifications + türe özel ayar)"""
+    if not _should_send(recipient, 'email_notifications'):
+        return False
+    if notification_type == 'answer' and not _should_send(recipient, 'notify_on_answer'):
+        return False
+    if notification_type == 'comment_design' and not _should_send(recipient, 'notify_on_answer'):
+        return False
+    if notification_type in ('like_question', 'like_answer', 'like_design') and not _should_send(recipient, 'notify_on_like'):
+        return False
+    if notification_type == 'follow' and not _should_send(recipient, 'notify_on_follow'):
+        return False
+    if notification_type == 'mention' and not _should_send(recipient, 'notify_mention'):
+        return False
+    return True
+
+
+def create_notification(recipient, sender, notification_type: str, message: str, *, question=None, answer=None, design=None, community=None):
     """
     Bir bildirim kaydı oluşturur. İsteğe bağlı e-posta ve push gönderir.
     recipient: User; sender: User veya None (sistem bildirimi, örn. moderasyon).
@@ -89,10 +108,11 @@ def create_notification(recipient, sender, notification_type: str, message: str,
         message=message,
         question=question,
         answer=answer,
+        design=design,
         community=community,
     )
     # E-posta (ayarlara göre)
-    if _should_send(recipient, 'email_notifications'):
+    if _should_send_email(recipient, notification_type):
         try:
             from emails.services import EmailService
             EmailService.send_notification_email(recipient, f"Bildirim: {message[:50]}", message, notification_type)
@@ -100,11 +120,20 @@ def create_notification(recipient, sender, notification_type: str, message: str,
             pass
     # Push (FCM) - ayarlara göre (push_notifications + notify_on_answer vb.)
     if _should_send_push(recipient, notification_type):
-        send_fcm_to_user(recipient, "Marifetli", message, notification_type, question=question, answer=answer, sender=sender)
+        send_fcm_to_user(
+            recipient,
+            "Marifetli",
+            message,
+            notification_type,
+            question=question,
+            answer=answer,
+            design=design,
+            sender=sender,
+        )
     return notif
 
 
-def _build_notification_url(notification_type: str, question=None, answer=None, sender=None):
+def _build_notification_url(notification_type: str, question=None, answer=None, design=None, sender=None):
     """Push tıklanınca açılacak sayfa URL'i (path only)."""
     base = (getattr(settings, 'FRONTEND_URL', None) or '').rstrip('/')
     path = '/'
@@ -112,6 +141,8 @@ def _build_notification_url(notification_type: str, question=None, answer=None, 
         path = f'/soru/{question.slug}'
         if answer and getattr(answer, 'pk', None):
             path = f'{path}#comment-{answer.pk}'
+    elif design and getattr(design, 'pk', None):
+        path = f'/tasarim/{design.pk}'
     elif sender and getattr(sender, 'username', None):
         path = f'/profil/{sender.username}'
     elif notification_type == 'community_join_request' and getattr(settings, 'FRONTEND_URL', None):
@@ -124,7 +155,11 @@ def _notification_icon_type(notification_type: str) -> str:
     """Bildirim türüne göre SW'da kullanılacak ikon anahtarı (beğeni/ yorum/ takip vb.)."""
     if notification_type in ('like_question', 'like_answer'):
         return 'like'
+    if notification_type == 'like_design':
+        return 'like'
     if notification_type == 'answer':
+        return 'comment'
+    if notification_type == 'comment_design':
         return 'comment'
     if notification_type == 'follow':
         return 'follow'
@@ -143,7 +178,7 @@ def _sender_image_url(sender) -> str | None:
     return url if url.startswith('http') else None
 
 
-def send_fcm_to_user(user, title: str, body: str, notification_type: str = '', question=None, answer=None, sender=None):
+def send_fcm_to_user(user, title: str, body: str, notification_type: str = '', question=None, answer=None, design=None, sender=None):
     """
     Kullanıcının kayıtlı cihazlarına FCM push gönderir.
     Firebase config (FCM credentials) .env'den veya settings'ten okunur.
@@ -159,7 +194,9 @@ def send_fcm_to_user(user, title: str, body: str, notification_type: str = '', q
         data['question_slug'] = str(question.slug)
     if answer_id := (answer.pk if answer else None):
         data['answer_id'] = str(answer_id)
-    data['url'] = _build_notification_url(notification_type, question=question, answer=answer, sender=sender)
+    if design_id := (design.pk if design else None):
+        data['design_id'] = str(design_id)
+    data['url'] = _build_notification_url(notification_type, question=question, answer=answer, design=design, sender=sender)
     image_url = _sender_image_url(sender)
     _send_fcm(tokens, title=title, body=body, data=data, image_url=image_url)
 

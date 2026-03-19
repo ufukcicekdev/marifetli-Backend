@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth import get_user_model
 from questions.models import Question
 from answers.models import Answer
+from designs.models import Design
 
 User = get_user_model()
 
@@ -18,6 +19,8 @@ class Notification(models.Model):
         ('moderation_removed', 'Moderatör tarafından içerik kaldırıldı'),
         ('community_join_request', 'Topluluğa katılım talebi'),
         ('community_post_removed', 'Gönderi topluluktan kaldırıldı'),
+        ('like_design', 'Design Liked'),
+        ('comment_design', 'Design Commented'),
     ]
 
     recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
@@ -25,6 +28,7 @@ class Notification(models.Model):
     notification_type = models.CharField(max_length=32, choices=NOTIFICATION_TYPES)
     question = models.ForeignKey(Question, on_delete=models.CASCADE, null=True, blank=True, related_name='notifications')
     answer = models.ForeignKey(Answer, on_delete=models.CASCADE, null=True, blank=True, related_name='notifications')
+    design = models.ForeignKey(Design, on_delete=models.CASCADE, null=True, blank=True, related_name='notifications')
     community = models.ForeignKey(
         'communities.Community',
         on_delete=models.CASCADE,

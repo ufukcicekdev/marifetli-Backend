@@ -95,6 +95,38 @@ def check_and_award_on_first_community(user: User) -> None:
     award_achievement(user, 'first_community')
 
 
+def check_and_award_on_design_count(user: User, count: int) -> None:
+    """Yüklenen tasarım sayısına göre başarılar."""
+    if count >= 20:
+        award_achievement(user, 'design_master_20')
+    elif count >= 5:
+        award_achievement(user, 'design_starter_5')
+
+
+def check_and_award_on_design_like_received_count(user: User, count: int) -> None:
+    """Tasarımların aldığı toplam beğeni sayısına göre başarı."""
+    if count >= 10:
+        award_achievement(user, 'design_loved_10')
+
+
+def check_and_award_on_design_comment_received_count(user: User, count: int) -> None:
+    """Tasarımlara gelen toplam yorum sayısına göre başarı."""
+    if count >= 10:
+        award_achievement(user, 'design_discussed_10')
+
+
+def check_and_award_on_design_like_given_count(user: User, count: int) -> None:
+    """Kullanıcının yaptığı tasarım beğeni sayısı."""
+    if count >= 10:
+        award_achievement(user, 'design_supporter_10')
+
+
+def check_and_award_on_design_comment_count(user: User, count: int) -> None:
+    """Kullanıcının yazdığı tasarım yorumu sayısı."""
+    if count >= 10:
+        award_achievement(user, 'design_commenter_10')
+
+
 def record_activity_and_check_streak(user: User) -> None:
     """
     Kullanıcının bugün bir aktivite yaptığını kaydeder (yorum, beğeni, gönderi).

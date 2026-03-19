@@ -11,12 +11,13 @@ class NotificationSerializer(serializers.ModelSerializer):
     sender = UserSerializer(read_only=True, allow_null=True)
     question_slug = serializers.SerializerMethodField()
     community_slug = serializers.SerializerMethodField()
+    design_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Notification
         fields = [
-            'id', 'recipient', 'sender', 'notification_type', 'question', 'answer', 'community',
-            'question_slug', 'community_slug', 'message', 'is_read', 'created_at', 'updated_at',
+            'id', 'recipient', 'sender', 'notification_type', 'question', 'answer', 'design', 'community',
+            'question_slug', 'community_slug', 'design_id', 'message', 'is_read', 'created_at', 'updated_at',
         ]
 
     def get_question_slug(self, obj):
@@ -28,6 +29,9 @@ class NotificationSerializer(serializers.ModelSerializer):
         if obj.community_id:
             return getattr(obj.community, 'slug', None)
         return None
+
+    def get_design_id(self, obj):
+        return obj.design_id
 
 
 class NotificationSettingSerializer(serializers.ModelSerializer):

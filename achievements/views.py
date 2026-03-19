@@ -26,6 +26,12 @@ CODE_TARGET_FALLBACK = {
     'reputation_1000': 1000,
     'popular_10': 10,
     'first_community': 1,
+    'design_starter_5': 5,
+    'design_master_20': 20,
+    'design_loved_10': 10,
+    'design_discussed_10': 10,
+    'design_supporter_10': 10,
+    'design_commenter_10': 10,
 }
 
 
@@ -90,6 +96,27 @@ def _get_progress_for_achievement(user, a):
         current = Community.objects.filter(owner=user).count()
         t = target or 1
         return min(current, t), t
+    # Tasarım üretimi / etkileşimi
+    if a.code in ('design_starter_5', 'design_master_20'):
+        from designs.models import Design
+        current = Design.objects.filter(author=user).count()
+        return min(current, target), target
+    if a.code == 'design_loved_10':
+        from designs.models import DesignLike
+        current = DesignLike.objects.filter(design__author=user).count()
+        return min(current, target), target
+    if a.code == 'design_discussed_10':
+        from designs.models import DesignComment
+        current = DesignComment.objects.filter(design__author=user).count()
+        return min(current, target), target
+    if a.code == 'design_supporter_10':
+        from designs.models import DesignLike
+        current = DesignLike.objects.filter(user=user).count()
+        return min(current, target), target
+    if a.code == 'design_commenter_10':
+        from designs.models import DesignComment
+        current = DesignComment.objects.filter(author=user).count()
+        return min(current, target), target
     # İtibar: 100 / 1000
     if a.code in ('reputation_100', 'reputation_1000'):
         from users.models import UserProfile

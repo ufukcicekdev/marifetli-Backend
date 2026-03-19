@@ -23,6 +23,8 @@ class Design(models.Model):
     tags = models.CharField(max_length=500, blank=True, help_text="Virgülle ayrılmış etiketler: Örgü, Ahşap, Kanaviçe")
     description = models.TextField(blank=True, help_text="Tasarım açıklaması (SEO ve kullanıcılar için)")
     copyright_confirmed = models.BooleanField(default=False)
+    like_count = models.PositiveIntegerField(default=0)
+    comment_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -45,3 +47,29 @@ class DesignImage(models.Model):
         ordering = ["order"]
         verbose_name = "Tasarım görseli"
         verbose_name_plural = "Tasarım görselleri"
+
+
+class DesignLike(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="design_likes")
+    design = models.ForeignKey(Design, on_delete=models.CASCADE, related_name="likes")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("user", "design")
+        ordering = ["-created_at"]
+        verbose_name = "Tasarım beğenisi"
+        verbose_name_plural = "Tasarım beğenileri"
+
+
+class DesignComment(models.Model):
+    design = models.ForeignKey(Design, on_delete=models.CASCADE, related_name="comments")
+    author = models.ForeignKey(User, on_delete=models.CASCADE, related_name="design_comments")
+    parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.CASCADE, related_name="replies")
+    content = models.TextField(max_length=2000)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        verbose_name = "Tasarım yorumu"
+        verbose_name_plural = "Tasarım yorumları"

@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.core.files.base import ContentFile
-from .models import Design, DesignImage
+from .models import Design, DesignImage, DesignLike, DesignComment
 from .services import add_watermark_to_image
 import uuid
 import os
@@ -58,12 +58,13 @@ class DesignSerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
     image_urls = serializers.SerializerMethodField()
     author_username = serializers.SerializerMethodField()
+    liked_by_me = serializers.SerializerMethodField()
 
     class Meta:
         model = Design
         fields = [
             "id", "image_url", "image_urls", "license", "add_watermark", "tags", "description",
-            "created_at", "author_username",
+            "like_count", "comment_count", "liked_by_me", "created_at", "author_username",
         ]
         read_only_fields = fields
 
@@ -85,6 +86,13 @@ class DesignSerializer(serializers.ModelSerializer):
     def get_author_username(self, obj):
         return obj.author.username if obj.author_id else None
 
+    def get_liked_by_me(self, obj):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        return DesignLike.objects.filter(user=user, design=obj).exists()
+
 
 class DesignUpdateSerializer(serializers.ModelSerializer):
     """Sahip tasarımı günceller (license, tags, description)."""
@@ -96,4 +104,39 @@ class DesignUpdateSerializer(serializers.ModelSerializer):
     def validate_license(self, value):
         if value not in dict(Design._meta.get_field("license").choices):
             raise serializers.ValidationError("Geçersiz lisans.")
+        return value
+
+
+class DesignLikeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DesignLike
+        fields = ["id", "user", "design", "created_at"]
+        read_only_fields = ["id", "user", "design", "created_at"]
+
+
+class DesignCommentSerializer(serializers.ModelSerializer):
+    author_username = serializers.SerializerMethodField()
+    author_profile_picture = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DesignComment
+        fields = ["id", "design", "author", "author_username", "author_profile_picture", "parent", "content", "created_at", "updated_at"]
+        read_only_fields = ["id", "design", "author", "author_username", "author_profile_picture", "created_at", "updated_at"]
+
+    def get_author_username(self, obj):
+        return obj.author.username if obj.author_id else None
+
+    def get_author_profile_picture(self, obj):
+        req = self.context.get("request")
+        profile_picture = getattr(obj.author, "profile_picture", None)
+        return _image_url(req, profile_picture)
+
+    def validate_parent(self, value):
+        if value is None:
+            return value
+        design = self.context.get("design")
+        if design is not None and value.design_id != design.id:
+            raise serializers.ValidationError("Yanıt sadece aynı tasarımın yorumuna verilebilir.")
+        if value.parent_id is not None:
+            raise serializers.ValidationError("En fazla bir seviye yanıt desteklenir.")
         return value
