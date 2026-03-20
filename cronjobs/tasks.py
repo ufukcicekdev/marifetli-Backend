@@ -120,6 +120,12 @@ def moderate_content_task(model_label, pk):
                     question=a.question,
                     answer=a,
                 )
+            try:
+                from reputation.badge_service import BadgeService
+
+                BadgeService.on_answer_moderation_approved(a)
+            except Exception:
+                logger.exception("BadgeService.on_answer_moderation_approved failed for answer %s", getattr(a, "pk", None))
 
         def answer_clear_pending(a):
             if getattr(a, "pending_content", None):

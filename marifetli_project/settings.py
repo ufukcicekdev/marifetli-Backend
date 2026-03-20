@@ -70,6 +70,7 @@ INSTALLED_APPS = [
     "logs",
     "search_console",
     "bot_activity",
+    "category_experts",
 ]
 
 MIDDLEWARE = [
@@ -444,6 +445,14 @@ GEMINI_API_KEY = config("GEMINI_API_KEY", default="").strip()  # Bot içerik ür
 GEMINI_MODEL = config("GEMINI_MODEL", default="gemini-2.0-flash").strip()  # 404 alıyorsan gemini-1.5-flash-latest dene
 # Celery Beat her tetiklediğinde bu kadar soru üretilir (1–20). Günde toplam = BOT_QUESTIONS_PER_RUN × Beat'teki çalışma sayısı (örn. 6 × 5 = 30 soru/gün).
 BOT_QUESTIONS_PER_RUN = config("BOT_QUESTIONS_PER_RUN", default=5, cast=int)
+
+# Kategori uzmanı (AI): .env ile aç/kapa; soru-cevaplar CategoryExpertQuery tablosunda tutulur.
+# CATEGORY_EXPERT_LLM_PROVIDER: gemini | stub | mypkg.myprovider.MyClass
+CATEGORY_EXPERT_ENABLED = config("CATEGORY_EXPERT_ENABLED", default=False, cast=bool)
+CATEGORY_EXPERT_LLM_PROVIDER = config("CATEGORY_EXPERT_LLM_PROVIDER", default="gemini").strip()
+CATEGORY_EXPERT_MAX_QUESTIONS_PER_USER = config("CATEGORY_EXPERT_MAX_QUESTIONS_PER_USER", default=3, cast=int)
+# all_time | day | month — pencere içinde kullanılan soru sayısı
+CATEGORY_EXPERT_LIMIT_PERIOD = config("CATEGORY_EXPERT_LIMIT_PERIOD", default="all_time").strip()
 
 # Celery - background task kuyruğu (Redis broker). REDIS_URL varsa aynı Redis kullanılır.
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default=REDIS_URL or "")

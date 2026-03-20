@@ -29,6 +29,13 @@ class Command(BaseCommand):
             q = answer_obj.question
             q.answer_count = q.answers.filter(moderation_status=1, is_deleted=False).count()
             q.save(update_fields=["answer_count"])
+            if answer_obj.moderation_status == 1:
+                try:
+                    from reputation.badge_service import BadgeService
+
+                    BadgeService.on_answer_moderation_approved(answer_obj)
+                except Exception:
+                    pass
 
         # Sorular
         for q in Question.objects.filter(moderation_status=0, is_deleted=False).order_by("created_at")[:limit]:

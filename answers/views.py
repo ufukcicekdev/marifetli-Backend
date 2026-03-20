@@ -11,6 +11,7 @@ from django.contrib.auth import get_user_model
 from core.permissions import IsVerified
 from .models import Answer, AnswerLike, AnswerReport
 from .serializers import AnswerSerializer, AnswerCreateSerializer, AnswerLikeSerializer, AnswerReportSerializer
+from reputation.prefetch import author_badges_prefetch
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -31,7 +32,11 @@ class AnswerListView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         question_id = self.kwargs['question_id']
-        qs = Answer.objects.filter(question_id=question_id, is_deleted=False).select_related('author', 'parent')
+        qs = (
+            Answer.objects.filter(question_id=question_id, is_deleted=False)
+            .select_related('author', 'parent')
+            .prefetch_related(author_badges_prefetch())
+        )
         user = self.request.user
         if user.is_authenticated and (user.is_staff or user.is_superuser):
             return qs
@@ -80,6 +85,7 @@ class UserAnswersListView(generics.ListAPIView):
             .filter(author_id=user_id, is_deleted=False)
             .exclude(moderation_status=2)
             .select_related('author', 'question')
+            .prefetch_related(author_badges_prefetch())
         )
 
 
@@ -92,7 +98,9 @@ class AnswerDetailView(generics.RetrieveUpdateDestroyAPIView):
         return [IsAuthenticatedOrReadOnly()]
 
     def get_queryset(self):
-        qs = Answer.objects.filter(is_deleted=False)
+        qs = Answer.objects.filter(is_deleted=False).select_related('author', 'parent').prefetch_related(
+            author_badges_prefetch()
+        )
         user = self.request.user
         if user.is_authenticated and (user.is_staff or user.is_superuser):
             return qs
@@ -167,6 +175,12 @@ class AnswerLikeView(generics.CreateAPIView):
         # Cevap sahibine itibar: beğeni alan içerik
         from reputation.services import award_reputation
         award_reputation(answer.author, 'like_received', content_object=answer, description='Cevabına beğeni geldi')
+        try:
+            from reputation.badge_service import BadgeService
+
+            BadgeService.check_popular_for_user(answer.author)
+        except Exception:
+            pass
         # Cevap sahibine bildirim (kendisi beğenmediyse)
         if answer.author_id != self.request.user.pk:
             from notifications.services import create_notification

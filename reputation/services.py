@@ -4,6 +4,7 @@ Reputation service - award points and check badges
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from .models import ReputationHistory, Badge, UserBadge, REPUTATION_RULES
+from .leveling import sync_user_level_title
 
 User = get_user_model()
 
@@ -34,12 +35,21 @@ def award_reputation(user: User, reason: str, points: int = None, content_object
     # Başarılar (achievements) itibar eşiklerini kontrol et (100, 1000 vb.)
     from achievements.services import check_and_award_on_reputation
     check_and_award_on_reputation(user, profile.reputation)
+    sync_user_level_title(user)
 
 
 def check_and_award_badges(user: User):
-    """Check if user qualifies for new badges"""
+    """İtibar eşiği olan (milestone) rozetleri verir; davranış rozetleri BadgeService ile."""
     from users.models import UserProfile
+
     profile, _ = UserProfile.objects.get_or_create(user=user, defaults={'reputation': 0})
     earned = set(UserBadge.objects.filter(user=user).values_list('badge_id', flat=True))
-    for badge in Badge.objects.filter(points_required__lte=profile.reputation).exclude(id__in=earned):
+    for badge in (
+        Badge.objects.filter(
+            badge_type=Badge.BadgeType.MILESTONE,
+            points_required__lte=profile.reputation,
+        )
+        .exclude(id__in=earned)
+        .order_by('points_required', 'id')
+    ):
         UserBadge.objects.create(user=user, badge=badge)

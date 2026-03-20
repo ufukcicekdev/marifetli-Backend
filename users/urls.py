@@ -15,6 +15,7 @@ urlpatterns = [
     path('oauth-redirect-uri/', views.oauth_redirect_uri_debug),
     path('logout/', views.logout_view, name='logout'),
     path('profile/', views.ProfileDetailView.as_view(), name='profile-detail'),
+    path('me/gamification/', views.my_gamification_roadmap, name='my-gamification-roadmap'),
     path('me/', views.UserDetailView.as_view(), name='user-detail'),
     path('change-password/', views.ChangePasswordView.as_view(), name='change-password'),
     path('request-password-reset/', views.request_password_reset, name='request-password-reset'),

@@ -6,4 +6,5 @@ urlpatterns = [
     path('settings/stats/', views.site_stats),
     path('settings/cache-status/', views.cache_status),
     path('contact/', views.submit_contact_message),
+    path('gamification/public/', views.public_gamification_info),
 ]

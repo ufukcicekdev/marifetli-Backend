@@ -52,11 +52,30 @@ class ReputationHistory(models.Model):
 
 
 class Badge(models.Model):
-    """Milestone-based badges"""
+    """Rozetler: itibar eşiği (milestone) veya davranışa göre (answer_count vb.)."""
+
+    class BadgeType(models.TextChoices):
+        MILESTONE = 'milestone', 'İtibar eşiği'
+        FIRST_AVATAR = 'first_avatar', 'İlk profil görseli'
+        ANSWER_COUNT = 'answer_count', 'Onaylı cevap sayısı'
+        DESIGN_COUNT = 'design_count', 'Tasarım paylaşımı'
+        POPULAR_CONTENT = 'popular_content', 'Popüler içerik (beğeni)'
+
     name = models.CharField(max_length=100)
     slug = models.SlugField(unique=True)
     description = models.TextField(blank=True)
-    icon = models.CharField(max_length=50, blank=True)  # Icon name or URL
+    icon = models.CharField(max_length=50, blank=True)  # Emoji veya kısa etiket
+    icon_svg = models.TextField(blank=True, help_text='İsteğe bağlı SVG (güvenilir kaynak)')
+    badge_type = models.CharField(
+        max_length=32,
+        choices=BadgeType.choices,
+        default=BadgeType.MILESTONE,
+        db_index=True,
+    )
+    requirement_value = models.PositiveIntegerField(
+        default=0,
+        help_text='Davranış rozetleri için eşik (örn. 10 cevap, 50 beğeni)',
+    )
     points_required = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 

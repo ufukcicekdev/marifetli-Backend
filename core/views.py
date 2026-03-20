@@ -159,3 +159,56 @@ def cache_status(request):
         'redis_used': redis_used,
         'ping_ok': ping_ok,
     })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def public_gamification_info(request):
+    """
+    Giriş gerektirmez: seviye bantları, rozet listesi ve ödül mantığı özeti (modal / tanıtım için).
+    """
+    levels = [
+        {'title': 'Yeni Zanaatkar', 'points_min': 0, 'points_max': 100},
+        {'title': 'Maharetli Çırak', 'points_min': 101, 'points_max': 500},
+        {'title': 'Gözü Pek Kalfa', 'points_min': 501, 'points_max': 1500},
+        {'title': 'Baş Usta', 'points_min': 1501, 'points_max': None},
+    ]
+    how_it_works = [
+        'İtibar puanın soru sorma, cevap yazma ve paylaşımlarına gelen beğenilerle artar.',
+        'Puana göre profilinde ve yorumlarında bir rütbe (unvan) görünür.',
+        'Belirli davranışlar için rozet kazanırsın (ör. profil fotoğrafı, yorum sayısı, tasarım paylaşımı).',
+        'Ayrıca “Başarılar” sayfasında farklı hedefler ve günlük seriler vardır.',
+    ]
+    reputation_tips = [
+        'Soru paylaşmak itibar kazandırır (moderasyon sonrası).',
+        'Onaylı yorum yazmak itibar kazandırır.',
+        'Cevabın “en iyi” seçilirse ekstra itibar.',
+        'Gönderine veya yorumuna beğeni gelmek itibar kazandırır.',
+    ]
+    badges = []
+    try:
+        from reputation.models import Badge
+
+        for b in Badge.objects.all().order_by('badge_type', 'id'):
+            badges.append(
+                {
+                    'slug': b.slug,
+                    'name': b.name,
+                    'description': (b.description or '')[:500],
+                    'badge_type': b.badge_type,
+                    'requirement_value': b.requirement_value,
+                    'points_required': b.points_required,
+                    'icon': b.icon or '',
+                }
+            )
+    except Exception:
+        pass
+
+    return Response(
+        {
+            'levels': levels,
+            'how_it_works': how_it_works,
+            'reputation_tips': reputation_tips,
+            'badges': badges,
+        }
+    )

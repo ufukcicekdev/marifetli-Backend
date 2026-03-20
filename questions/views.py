@@ -17,6 +17,8 @@ from core.cache_utils import get_question_list_cache_key, invalidate_question_li
 from .models import Question, QuestionLike, QuestionView, QuestionReport, Tag
 from .serializers import QuestionListSerializer, QuestionDetailSerializer, QuestionCreateSerializer, QuestionLikeSerializer, QuestionReportSerializer, TagSerializer
 from answers.serializers import AnswerSerializer
+from answers.models import Answer
+from reputation.prefetch import author_badges_prefetch
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -37,7 +39,7 @@ class QuestionListView(generics.ListCreateAPIView):
         qs = (
             Question.objects.all()
             .select_related('author', 'category', 'community')
-            .prefetch_related('tags')
+            .prefetch_related('tags', author_badges_prefetch())
         )
         user = self.request.user
         # Kullanıcı kendi sorularını listeliyorsa sadece onaylı veya beklemede olanları görür; reddedilen (2) gösterilmez
@@ -96,7 +98,9 @@ class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
     lookup_field = 'slug'
 
     def get_queryset(self):
-        qs = Question.objects.select_related('author', 'category').prefetch_related('tags')
+        qs = Question.objects.select_related('author', 'category').prefetch_related(
+            'tags', author_badges_prefetch()
+        )
         user = self.request.user
         # Admin/staff her şeyi görebilir
         if user.is_authenticated and (user.is_staff or user.is_superuser):
@@ -198,6 +202,12 @@ class QuestionLikeView(generics.CreateAPIView):
         # Soru sahibine itibar: beğeni alan içerik
         from reputation.services import award_reputation
         award_reputation(question.author, 'like_received', content_object=question, description='Soruna beğeni geldi')
+        try:
+            from reputation.badge_service import BadgeService
+
+            BadgeService.check_popular_for_user(question.author)
+        except Exception:
+            pass
         # Soru sahibine bildirim (kendisi beğenmediyse)
         if question.author_id != self.request.user.pk:
             from notifications.services import create_notification
@@ -236,8 +246,20 @@ class QuestionAnswersView(generics.ListAPIView):
 
     def get_queryset(self):
         question_id = self.kwargs['pk']
-        question = Question.objects.get(pk=question_id)
-        return question.answers.all()
+        qs = (
+            Answer.objects.filter(question_id=question_id, is_deleted=False)
+            .select_related('author', 'parent')
+            .prefetch_related(author_badges_prefetch())
+        )
+        user = self.request.user
+        if user.is_authenticated and (user.is_staff or user.is_superuser):
+            return qs
+        if user.is_authenticated:
+            return qs.filter(
+                Q(moderation_status=1)
+                | ((Q(author=user) | Q(question__author=user)) & ~Q(moderation_status=2))
+            )
+        return qs.filter(moderation_status=1)
 
 
 class QuestionReportView(generics.CreateAPIView):
@@ -255,7 +277,11 @@ class MyQuestionsView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Question.objects.filter(author=self.request.user)
+        return (
+            Question.objects.filter(author=self.request.user)
+            .select_related('author', 'category', 'community')
+            .prefetch_related('tags', author_badges_prefetch())
+        )
 
 
 class TagListView(generics.ListAPIView):

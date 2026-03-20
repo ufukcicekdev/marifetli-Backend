@@ -39,7 +39,8 @@ def get_question_list_cache_key(request):
     if isinstance(search, list):
         search = search[0] if search else ""
     qhash = _hash_query(params)
-    return f"{QUESTION_LIST_KEY}:v{version}:{page}:{ordering}:{search}:{qhash}"
+    # av2: UserSerializer'da author için avatar_badges + current_level_title
+    return f"{QUESTION_LIST_KEY}:v{version}:av2:{page}:{ordering}:{search}:{qhash}"
 
 
 def invalidate_question_list():

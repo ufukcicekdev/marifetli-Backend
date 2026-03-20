@@ -36,6 +36,9 @@ class RegisterView(generics.CreateAPIView):
 
         # Create user profile
         UserProfile.objects.create(user=user)
+        from reputation.leveling import sync_user_level_title
+
+        sync_user_level_title(user)
 
         # Create notification preferences
         UserNotificationPreference.objects.create(user=user)
@@ -162,6 +165,18 @@ def oauth_redirect_uri_debug(request):
     })
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def my_gamification_roadmap(request):
+    """
+    Giriş yapmış kullanıcı için seviye / rozet yol haritası (UI teşvik metni).
+    Salt okunur; puan veya rozet değiştirmez.
+    """
+    from reputation.gamification_progress import build_gamification_roadmap
+
+    return Response(build_gamification_roadmap(request.user))
+
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def logout_view(request):
@@ -186,6 +201,15 @@ class ProfileDetailView(generics.RetrieveUpdateAPIView):
         profile, created = UserProfile.objects.get_or_create(user=self.request.user)
         return profile
 
+    def perform_update(self, serializer):
+        super().perform_update(serializer)
+        user = self.request.user
+        from reputation.leveling import sync_user_level_title
+        from reputation.badge_service import BadgeService
+
+        sync_user_level_title(user)
+        BadgeService.on_profile_media_updated(user)
+
 
 class UserDetailView(generics.RetrieveUpdateAPIView):
     serializer_class = UserSerializer
@@ -200,8 +224,14 @@ class UserDetailView(generics.RetrieveUpdateAPIView):
 
     def perform_update(self, serializer):
         serializer.save()
+        user = self.request.user
         from achievements.services import check_and_award_on_profile_complete
-        check_and_award_on_profile_complete(self.request.user)
+        from reputation.leveling import sync_user_level_title
+        from reputation.badge_service import BadgeService
+
+        check_and_award_on_profile_complete(user)
+        sync_user_level_title(user)
+        BadgeService.on_profile_media_updated(user)
 
 
 class UserByUsernameView(generics.GenericAPIView):
@@ -242,6 +272,24 @@ class UserByUsernameView(generics.GenericAPIView):
         ).count()
         following_count += followed_community_count
 
+        from reputation.leveling import display_level_title_for_user
+        from reputation.badge_service import reputation_badges_gallery
+        from reputation.models import UserBadge
+
+        avatar_rows = list(
+            UserBadge.objects.filter(user=user)
+            .select_related('badge')
+            .order_by('-earned_at')[:3]
+        )
+        avatar_badges = [
+            {
+                'slug': ub.badge.slug,
+                'name': ub.badge.name,
+                'icon': (ub.badge.icon or '').strip() or '⭐',
+            }
+            for ub in avatar_rows
+        ]
+
         data = {
             'id': user.id,
             'username': user.username,
@@ -255,6 +303,9 @@ class UserByUsernameView(generics.GenericAPIView):
             'followers_count': followers_count,
             'following_count': following_count,
             'reputation': profile.reputation if profile else 0,
+            'current_level_title': display_level_title_for_user(user),
+            'avatar_badges': avatar_badges,
+            'reputation_badges': reputation_badges_gallery(user),
             'location': profile.location if profile else '',
             'website': profile.website if profile else '',
             'instagram_url': (profile.instagram_url or '') if profile else '',

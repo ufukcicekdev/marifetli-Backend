@@ -8,6 +8,45 @@ User = get_user_model()
 
 class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False)
+    current_level_title = serializers.SerializerMethodField()
+    avatar_badges = serializers.SerializerMethodField()
+
+    def get_current_level_title(self, obj):
+        from reputation.leveling import display_level_title_for_user
+
+        return display_level_title_for_user(obj)
+
+    def get_avatar_badges(self, obj):
+        """
+        Avatar köşesinde gösterilecek son kazanılan rozetler (en fazla 3).
+        Aynı istek içinde tekrarlayan kullanıcılar için context önbelleği.
+        """
+        cache = self.context.setdefault('_avatar_badges_cache', {})
+        if obj.pk in cache:
+            return cache[obj.pk]
+        try:
+            if getattr(obj, '_prefetched_objects_cache', None) and 'badges' in obj._prefetched_objects_cache:
+                ubs = list(obj.badges.all()[:3])
+            else:
+                from reputation.models import UserBadge
+
+                ubs = list(
+                    UserBadge.objects.filter(user=obj)
+                    .select_related('badge')
+                    .order_by('-earned_at')[:3]
+                )
+            data = [
+                {
+                    'slug': ub.badge.slug,
+                    'name': ub.badge.name,
+                    'icon': (ub.badge.icon or '').strip() or '⭐',
+                }
+                for ub in ubs
+            ]
+        except Exception:
+            data = []
+        cache[obj.pk] = data
+        return data
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -17,10 +56,35 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ('id', 'email', 'username', 'first_name', 'last_name', 'bio', 'profile_picture', 
-                  'gender', 'followers_count', 'following_count', 'date_of_birth', 'is_verified', 
-                  'password', 'created_at', 'updated_at')
-        read_only_fields = ('id', 'followers_count', 'following_count', 'is_verified', 'created_at', 'updated_at')
+        fields = (
+            'id',
+            'email',
+            'username',
+            'first_name',
+            'last_name',
+            'bio',
+            'profile_picture',
+            'gender',
+            'followers_count',
+            'following_count',
+            'date_of_birth',
+            'is_verified',
+            'current_level_title',
+            'avatar_badges',
+            'password',
+            'created_at',
+            'updated_at',
+        )
+        read_only_fields = (
+            'id',
+            'followers_count',
+            'following_count',
+            'is_verified',
+            'current_level_title',
+            'avatar_badges',
+            'created_at',
+            'updated_at',
+        )
 
     def create(self, validated_data):
         password = validated_data.pop('password')

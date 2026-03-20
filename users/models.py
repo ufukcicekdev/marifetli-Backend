@@ -26,6 +26,13 @@ class User(AbstractUser):
         default=False,
         help_text="Bu kullanıcı yapay zeka botudur; soru/cevap otomasyonu için kullanılır.",
     )
+    current_level_title = models.CharField(
+        'Rütbe başlığı',
+        max_length=64,
+        blank=True,
+        default='',
+        help_text='İtibar puanına göre otomatik güncellenir (önbellek / hızlı gösterim).',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

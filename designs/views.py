@@ -43,8 +43,11 @@ class DesignUploadView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         design = serializer.save()
         from achievements.services import record_activity_and_check_streak, check_and_award_on_design_count
+        from reputation.badge_service import BadgeService
+
         design_count = Design.objects.filter(author=request.user).count()
         check_and_award_on_design_count(request.user, design_count)
+        BadgeService.on_design_created(request.user)
         record_activity_and_check_streak(request.user)
         read_serializer = DesignSerializer(design, context={"request": request})
         return Response(read_serializer.data, status=status.HTTP_201_CREATED)
@@ -111,6 +114,12 @@ class DesignLikeView(generics.CreateAPIView):
         check_and_award_on_design_like_given_count(self.request.user, given_count)
         received_count = DesignLike.objects.filter(design__author=design.author).count()
         check_and_award_on_design_like_received_count(design.author, received_count)
+        try:
+            from reputation.badge_service import BadgeService
+
+            BadgeService.check_popular_for_user(design.author)
+        except Exception:
+            pass
 
         if design.author_id != self.request.user.id:
             from notifications.services import create_notification
