@@ -22,6 +22,7 @@ def get_sitemap_paths():
             'sitemap-static.xml',
             'sitemap-questions.xml',
             'sitemap-blog.xml',
+            'sitemap-designs.xml',
         ],
     )
 

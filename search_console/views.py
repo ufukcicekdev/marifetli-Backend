@@ -30,7 +30,7 @@ def _escape_xml(s):
 @require_GET
 @cache_control(public=True, max_age=3600)
 def sitemap_index(request):
-    """Sitemap index: sitemap-static, sitemap-questions, sitemap-blog."""
+    """Sitemap index: sitemap-static, sitemap-questions, sitemap-blog, sitemap-designs."""
     base = _base_url()
     from django.utils import timezone
     now = timezone.now().strftime("%Y-%m-%dT%H:%M:%S+00:00")
@@ -46,6 +46,10 @@ def sitemap_index(request):
   </sitemap>
   <sitemap>
     <loc>{_escape_xml(base)}/sitemap-blog.xml</loc>
+    <lastmod>{now}</lastmod>
+  </sitemap>
+  <sitemap>
+    <loc>{_escape_xml(base)}/sitemap-designs.xml</loc>
     <lastmod>{now}</lastmod>
   </sitemap>
 </sitemapindex>"""
@@ -132,6 +136,26 @@ def sitemap_blog(request):
     urls = [
         f"  <url>\n    <loc>{_escape_xml(base)}/blog/{_escape_xml(s)}</loc>\n    <lastmod>{now}</lastmod>\n    <changefreq>weekly</changefreq>\n    <priority>0.7</priority>\n  </url>"
         for s in slugs
+    ]
+    xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + "\n".join(urls) + "\n</urlset>"
+    return HttpResponse(xml, content_type="application/xml")
+
+
+@require_GET
+@cache_control(public=True, max_age=3600)
+def sitemap_designs(request):
+    """Yayındaki tasarım detayları (frontend /tasarim/{id} URL'leri)."""
+    base = _base_url()
+    from django.utils import timezone
+    now = timezone.now().strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    try:
+        from designs.models import Design
+        ids = list(Design.objects.exclude(id__isnull=True).values_list("id", flat=True)[:50000])
+    except Exception:
+        ids = []
+    urls = [
+        f"  <url>\n    <loc>{_escape_xml(base)}/tasarim/{int(i)}</loc>\n    <lastmod>{now}</lastmod>\n    <changefreq>weekly</changefreq>\n    <priority>0.7</priority>\n  </url>"
+        for i in ids
     ]
     xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + "\n".join(urls) + "\n</urlset>"
     return HttpResponse(xml, content_type="application/xml")

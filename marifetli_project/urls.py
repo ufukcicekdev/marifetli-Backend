@@ -38,6 +38,7 @@ urlpatterns = [
     path('sitemap-static.xml', search_console_views.sitemap_static),
     path('sitemap-questions.xml', search_console_views.sitemap_questions),
     path('sitemap-blog.xml', search_console_views.sitemap_blog),
+    path('sitemap-designs.xml', search_console_views.sitemap_designs),
     path('admin/bot-activity/', include('bot_activity.urls')),
     path('admin/', admin.site.urls),
     path('api/', include('core.urls')),
