@@ -66,6 +66,7 @@ def sitemap_static(request):
     routes = [
         ("", "daily", "1.0"),
         ("/sorular", "daily", "0.9"),
+        ("/uzman", "weekly", "0.75"),
         ("/blog", "daily", "0.9"),
         ("/topluluklar", "weekly", "0.8"),
         ("/iletisim", "monthly", "0.5"),

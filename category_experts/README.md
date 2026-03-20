@@ -50,5 +50,5 @@ Admin: **Kategori uzmanları** — yeni ana kategori ekledikten sonra uzman kayd
 
 ## Frontend
 
-- Sayfa: `/uzman`
-- Menüde link yalnızca `enabled=true` iken görünür.
+- Tam sayfa: `/uzman` (SEO + JSON-LD; statik sitemap’te `sitemap-static.xml` içinde listelenir).
+- Sidebar / mega menü / anasayfa CTA: **Uzmana sor** → `/uzman`. Hızlı sohbet için sağdaki **FAB / panel** ayrı çalışır.
