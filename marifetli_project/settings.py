@@ -451,8 +451,12 @@ BOT_QUESTIONS_PER_RUN = config("BOT_QUESTIONS_PER_RUN", default=5, cast=int)
 CATEGORY_EXPERT_ENABLED = config("CATEGORY_EXPERT_ENABLED", default=False, cast=bool)
 CATEGORY_EXPERT_LLM_PROVIDER = config("CATEGORY_EXPERT_LLM_PROVIDER", default="gemini").strip()
 CATEGORY_EXPERT_MAX_QUESTIONS_PER_USER = config("CATEGORY_EXPERT_MAX_QUESTIONS_PER_USER", default=3, cast=int)
-# all_time | day | month — pencere içinde kullanılan soru sayısı
-CATEGORY_EXPERT_LIMIT_PERIOD = config("CATEGORY_EXPERT_LIMIT_PERIOD", default="all_time").strip()
+# all_time | day | month — pencere içinde kullanılan soru sayısı (varsayılan: günlük 3 soru)
+CATEGORY_EXPERT_LIMIT_PERIOD = config("CATEGORY_EXPERT_LIMIT_PERIOD", default="day").strip()
+# True ise env'deki all_time gerçekten "toplam ömür boyu" limit olarak kalır. False (varsayılan): all_time → günlük sayılır.
+CATEGORY_EXPERT_ALLOW_LIFETIME_EXPERT_LIMIT = config(
+    "CATEGORY_EXPERT_ALLOW_LIFETIME_EXPERT_LIMIT", default=False, cast=bool
+)
 
 # Celery - background task kuyruğu (Redis broker). REDIS_URL varsa aynı Redis kullanılır.
 CELERY_BROKER_URL = config("CELERY_BROKER_URL", default=REDIS_URL or "")

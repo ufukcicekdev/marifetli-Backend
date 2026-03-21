@@ -14,8 +14,12 @@ CATEGORY_EXPERT_LLM_PROVIDER=gemini
 # Kullanıcı başına soru limiti (0 = limitsiz)
 CATEGORY_EXPERT_MAX_QUESTIONS_PER_USER=3
 
-# Limit penceresi: all_time | day | month
-CATEGORY_EXPERT_LIMIT_PERIOD=all_time
+# Limit penceresi: day (varsayılan) | month | all_time
+CATEGORY_EXPERT_LIMIT_PERIOD=day
+# Eski all_time env'i kaldırmadan günlük limit istiyorsanız varsayılan yeterli.
+# Gerçekten ömür boyu toplam limit için:
+# CATEGORY_EXPERT_LIMIT_PERIOD=all_time
+# CATEGORY_EXPERT_ALLOW_LIFETIME_EXPERT_LIMIT=True
 
 # Gemini (gemini sağlayıcısı için; bot ile aynı anahtar)
 GEMINI_API_KEY=

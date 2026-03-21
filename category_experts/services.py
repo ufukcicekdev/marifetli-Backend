@@ -14,6 +14,20 @@ from .models import CategoryExpertQuery
 ISTANBUL = ZoneInfo("Europe/Istanbul")
 
 
+def get_effective_category_expert_limit_period() -> str:
+    """
+    Env'de eski all_time kalmış olsa bile ürün beklentisi günlük limittir.
+    Gerçek ömür boyu limit için CATEGORY_EXPERT_ALLOW_LIFETIME_EXPERT_LIMIT=True.
+    """
+    raw = (getattr(settings, "CATEGORY_EXPERT_LIMIT_PERIOD", "day") or "day").strip().lower()
+    if raw not in ("day", "month", "all_time"):
+        return "day"
+    allow_lifetime = bool(getattr(settings, "CATEGORY_EXPERT_ALLOW_LIFETIME_EXPERT_LIMIT", False))
+    if raw == "all_time" and not allow_lifetime:
+        return "day"
+    return raw
+
+
 def category_expert_feature_enabled() -> bool:
     return bool(getattr(settings, "CATEGORY_EXPERT_ENABLED", False))
 
@@ -31,7 +45,7 @@ def _window_start_utc(period: str) -> datetime | None:
 
 
 def count_user_queries_in_period(user) -> int:
-    period = (getattr(settings, "CATEGORY_EXPERT_LIMIT_PERIOD", "all_time") or "all_time").strip().lower()
+    period = get_effective_category_expert_limit_period()
     qs = CategoryExpertQuery.objects.filter(user=user)
     start = _window_start_utc(period)
     if start is not None:

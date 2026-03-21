@@ -12,7 +12,12 @@ from core.permissions import IsVerified
 from .models import CategoryExpert, CategoryExpertQuery
 from .providers import get_expert_llm_provider
 from .serializers import CategoryExpertAskSerializer
-from .services import category_expert_feature_enabled, expert_backend_ready, user_remaining_questions
+from .services import (
+    category_expert_feature_enabled,
+    expert_backend_ready,
+    get_effective_category_expert_limit_period,
+    user_remaining_questions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +46,7 @@ class CategoryExpertConfigView(APIView):
         enabled = category_expert_feature_enabled()
         provider = (getattr(settings, "CATEGORY_EXPERT_LLM_PROVIDER", "gemini") or "gemini").strip()
         max_q = int(getattr(settings, "CATEGORY_EXPERT_MAX_QUESTIONS_PER_USER", 3) or 3)
-        period = (getattr(settings, "CATEGORY_EXPERT_LIMIT_PERIOD", "all_time") or "all_time").strip()
+        period = get_effective_category_expert_limit_period()
 
         payload = {
             "enabled": enabled,
@@ -59,7 +64,10 @@ class CategoryExpertConfigView(APIView):
         else:
             payload["authenticated"] = False
 
-        return Response(payload)
+        resp = Response(payload)
+        # Kullanıcıya özel kalan hak; CDN/tarayıcı önbelleği karışmasın
+        resp["Cache-Control"] = "private, no-store"
+        return resp
 
 
 class CategoryExpertAskView(APIView):
@@ -147,7 +155,7 @@ class CategoryExpertAskView(APIView):
             answer_text=answer,
             provider=provider.name,
             model_name=model_name,
-            metadata={"limit_period": getattr(settings, "CATEGORY_EXPERT_LIMIT_PERIOD", "all_time")},
+            metadata={"limit_period": get_effective_category_expert_limit_period()},
         )
 
         new_remaining, _ = user_remaining_questions(request.user)
