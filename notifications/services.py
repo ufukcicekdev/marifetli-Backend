@@ -201,7 +201,41 @@ def send_fcm_to_user(user, title: str, body: str, notification_type: str = '', q
     _send_fcm(tokens, title=title, body=body, data=data, image_url=image_url)
 
 
-def _send_fcm(tokens: list, title: str, body: str, data: dict = None, image_url: str = None):
+def deliver_fcm_push_tokens(
+    tokens: list,
+    *,
+    title: str,
+    body: str,
+    data: dict | None = None,
+    image_url: str | None = None,
+    invalidate_token=None,
+) -> None:
+    """
+    Verilen FCM token listesine push gönderir.
+    invalidate_token: (token: str) -> None — geçersiz token silme (ör. KidsFCMDeviceToken).
+    Verilmezse varsayılan olarak FCMDeviceToken (ana site kullanıcıları) silinir.
+    """
+    if not tokens:
+        return
+    _send_fcm(
+        list(tokens),
+        title,
+        body,
+        data,
+        image_url,
+        invalidate_token=invalidate_token,
+    )
+
+
+def _send_fcm(
+    tokens: list,
+    title: str,
+    body: str,
+    data: dict = None,
+    image_url: str = None,
+    *,
+    invalidate_token=None,
+):
     """Firebase Cloud Messaging ile push gönder. FCMService.initialize() kullanır."""
     if not tokens:
         return
@@ -234,6 +268,14 @@ def _send_fcm(tokens: list, title: str, body: str, data: dict = None, image_url:
                 or 'mismatched-credential' in err_lower
             )
             if is_invalid:
-                deleted, _ = FCMDeviceToken.objects.filter(token=token).delete()
-                if deleted:
-                    logger.info("FCM: geçersiz token silindi (cihaz kaldırıldı veya farklı proje ile alınmış olabilir)")
+                if invalidate_token:
+                    try:
+                        invalidate_token(token)
+                    except Exception:
+                        pass
+                else:
+                    deleted, _ = FCMDeviceToken.objects.filter(token=token).delete()
+                    if deleted:
+                        logger.info(
+                            "FCM: geçersiz token silindi (cihaz kaldırıldı veya farklı proje ile alınmış olabilir)"
+                        )

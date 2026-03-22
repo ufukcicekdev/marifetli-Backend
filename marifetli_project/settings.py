@@ -32,6 +32,9 @@ DEBUG = config("DEBUG", default=False, cast=bool)
 ALLOWED_HOSTS = list(config("ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv()))
 if "healthcheck.railway.app" not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append("healthcheck.railway.app")
+# Kids frontend (aynı backend); Host header ile gelen istekler için
+if "cocuk.marifetli.com.tr" not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append("cocuk.marifetli.com.tr")
 
 
 # Application definition
@@ -71,6 +74,7 @@ INSTALLED_APPS = [
     "search_console",
     "bot_activity",
     "category_experts",
+    "kids",
 ]
 
 MIDDLEWARE = [
@@ -287,8 +291,23 @@ SIMPLE_JWT = {
     "SLIDING_TOKEN_REFRESH_LIFETIME": timedelta(days=1),
 }
 
+# Kids portal JWT — ana site SimpleJWT ile aynı header; `aud` ve `typ` ile ayrılır
+KIDS_JWT_SIGNING_KEY = config("KIDS_JWT_SIGNING_KEY", default=SECRET_KEY)
+KIDS_JWT_ACCESS_LIFETIME = timedelta(
+    minutes=config("KIDS_JWT_ACCESS_MINUTES", default=60, cast=int)
+)
+KIDS_JWT_REFRESH_LIFETIME = timedelta(
+    days=config("KIDS_JWT_REFRESH_DAYS", default=7, cast=int)
+)
+
 # Frontend URL - .env'den (e-posta linkleri, OAuth redirect, CORS için tek kaynak)
 FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
+# Marifetli Kids (cocuk.marifetli.com.tr) — CORS/CSRF ve davet linkleri
+KIDS_FRONTEND_URL = config(
+    "KIDS_FRONTEND_URL", default="https://cocuk.marifetli.com.tr"
+).strip().rstrip("/")
+# Kids UI ana domain altında /kids ise (örn. localhost:3000/kids) burada "kids" veya "/kids" verin; cocuk.* kökünde boş bırakın.
+KIDS_FRONTEND_PATH_PREFIX = config("KIDS_FRONTEND_PATH_PREFIX", default="").strip().strip("/")
 # Backend URL - e-posta şablonlarındaki logo vb. mutlak URL'ler için (örn. https://api.marifetli.com.tr)
 BACKEND_URL = config("BACKEND_URL", default="").strip().rstrip("/") or None
 
@@ -306,13 +325,38 @@ def _cors_origins_list():
         origins.append(base.replace("https://www.", "https://", 1))
     elif base.startswith("https://") and "www." not in base:
         origins.append(base.replace("https://", "https://www.", 1))
+    kids = (KIDS_FRONTEND_URL or "").strip().rstrip("/")
+    if kids and kids not in origins:
+        origins.append(kids)
     return ",".join(origins)
 
-CORS_ALLOWED_ORIGINS = config(
-    "CORS_ALLOWED_ORIGINS",
-    default=_cors_origins_list(),
-    cast=Csv()
+CORS_ALLOWED_ORIGINS = list(
+    config(
+        "CORS_ALLOWED_ORIGINS",
+        default=_cors_origins_list(),
+        cast=Csv(),
+    )
 )
+# .env'de CORS_ALLOWED_ORIGINS sadece canlı domainlerle sınırlıysa tarayıcı localhost'tan gelen
+# istekleri reddeder. DEBUG iken yerel Next (ve farklı port / cocuk.localhost) her zaman izinli.
+if DEBUG:
+    _dev_cors = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ]
+    for _o in _dev_cors:
+        if _o not in CORS_ALLOWED_ORIGINS:
+            CORS_ALLOWED_ORIGINS.append(_o)
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        r"^http://localhost:\d+$",
+        r"^http://127\.0\.0\.1:\d+$",
+        r"^http://[\w-]+\.localhost:\d+$",
+    ]
+else:
+    CORS_ALLOWED_ORIGIN_REGEXES = []
+
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_METHODS = ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"]
 CORS_ALLOW_HEADERS = ["accept", "accept-encoding", "authorization", "content-type", "origin", "user-agent", "x-csrftoken", "x-requested-with"]
@@ -333,6 +377,9 @@ def _csrf_trusted_origins_list():
     frontend = FRONTEND_URL.rstrip("/")
     if frontend and frontend not in origins:
         origins.append(frontend)
+    kids = (KIDS_FRONTEND_URL or "").strip().rstrip("/")
+    if kids and kids not in origins:
+        origins.append(kids)
     return origins
 
 CSRF_TRUSTED_ORIGINS = config(

@@ -55,6 +55,7 @@ urlpatterns = [
     path('api/designs/', include('designs.urls')),
     path('api/emails/', include('emails.urls')),
     path('api/category-experts/', include('category_experts.urls')),
+    path('api/kids/', include('kids.urls')),
     path('api-auth/', include('rest_framework.urls')),
 ]
 
