@@ -1,7 +1,7 @@
 """
 Gelecekte kendi modelinizi bağlamak için bu arayüzü uygulayın.
 
-.env: CATEGORY_EXPERT_LLM_PROVIDER=gemini (varsayılan) veya sınıf yolu ile override edilebilir.
+.env: CATEGORY_EXPERT_LLM_PROVIDER=moderator_chat (varsayılan, harici /chat) | gemini | stub | sınıf yolu.
 """
 from __future__ import annotations
 

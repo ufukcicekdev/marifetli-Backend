@@ -1,7 +1,8 @@
 """
 Sağlayıcı seçimi: .env CATEGORY_EXPERT_LLM_PROVIDER
 
-Özel sınıf yolu (ileride): CATEGORY_EXPERT_LLM_PROVIDER=myapp.my_providers.MyProvider
+Varsayılan: moderator_chat → CATEGORY_EXPERT_CHAT_URL (POST JSON {"message": "..."}).
+Özel sınıf: CATEGORY_EXPERT_LLM_PROVIDER=myapp.my_providers.MyProvider
 """
 from __future__ import annotations
 
@@ -12,11 +13,13 @@ from typing import Any
 from django.conf import settings
 
 from .gemini_provider import GeminiExpertProvider
+from .moderator_chat_provider import ModeratorChatExpertProvider
 from .stub_provider import StubExpertProvider
 
 logger = logging.getLogger(__name__)
 
 _BUILTIN = {
+    "moderator_chat": ModeratorChatExpertProvider,
     "gemini": GeminiExpertProvider,
     "stub": StubExpertProvider,
 }
@@ -27,7 +30,7 @@ def get_expert_llm_provider() -> ExpertLLMProvider:
     Ayarlardan sağlayıcı örneği döner.
     Özel modül: CATEGORY_EXPERT_LLM_PROVIDER=package.module.ClassName
     """
-    key = (getattr(settings, "CATEGORY_EXPERT_LLM_PROVIDER", "gemini") or "gemini").strip()
+    key = (getattr(settings, "CATEGORY_EXPERT_LLM_PROVIDER", "moderator_chat") or "moderator_chat").strip()
     if key in _BUILTIN:
         return _BUILTIN[key]()
 

@@ -434,6 +434,35 @@ CACHE_TTL_QUESTION_DETAIL = config("CACHE_TTL_QUESTION_DETAIL", default=30, cast
 # config'ten (env) verilmezse boş; boşsa LLM çağrısı yapılmaz.
 MODERATION_LLM_URL = config("MODERATION_LLM_URL", default="").strip()
 MODERATION_LLM_TIMEOUT = config("MODERATION_LLM_TIMEOUT", default=10, cast=int)
+
+
+def _resolve_category_expert_chat_url() -> str:
+    """
+    Kategori uzmanı /chat adresi.
+    - CATEGORY_EXPERT_CHAT_URL doluysa doğrudan kullanılır.
+    - Boşsa MODERATION_LLM_URL ile aynı origin; yol .../moderate veya .../moderator → .../chat.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    override = config("CATEGORY_EXPERT_CHAT_URL", default="").strip()
+    if override:
+        return override
+    mod = (MODERATION_LLM_URL or "").strip()
+    if not mod:
+        return ""
+    u = urlsplit(mod)
+    path = (u.path or "").rstrip("/")
+    if path.endswith("/moderate"):
+        new_path = path[: -len("/moderate")] + "/chat"
+    elif path.endswith("/moderator"):
+        new_path = path[: -len("/moderator")] + "/chat"
+    elif path:
+        new_path = path.rsplit("/", 1)[0] + "/chat"
+    else:
+        new_path = "/chat"
+    return urlunsplit((u.scheme, u.netloc, new_path, "", ""))
+
+
 # LLM'e gönderilecek talimat (prompt). Boşsa sadece kullanıcı metni gider. Varsa metin "Metin: ..." ile eklenir.
 MODERATION_LLM_PROMPT = config(
     "MODERATION_LLM_PROMPT",
@@ -447,9 +476,13 @@ GEMINI_MODEL = config("GEMINI_MODEL", default="gemini-2.0-flash").strip()  # 404
 BOT_QUESTIONS_PER_RUN = config("BOT_QUESTIONS_PER_RUN", default=5, cast=int)
 
 # Kategori uzmanı (AI): .env ile aç/kapa; soru-cevaplar CategoryExpertQuery tablosunda tutulur.
-# CATEGORY_EXPERT_LLM_PROVIDER: gemini | stub | mypkg.myprovider.MyClass
+# CATEGORY_EXPERT_LLM_PROVIDER: moderator_chat (varsayılan) | gemini | stub | mypkg.MyClass
 CATEGORY_EXPERT_ENABLED = config("CATEGORY_EXPERT_ENABLED", default=False, cast=bool)
-CATEGORY_EXPERT_LLM_PROVIDER = config("CATEGORY_EXPERT_LLM_PROVIDER", default="gemini").strip()
+CATEGORY_EXPERT_LLM_PROVIDER = config("CATEGORY_EXPERT_LLM_PROVIDER", default="moderator_chat").strip()
+# Harici /chat: POST {"message": "..."}. Boşsa MODERATION_LLM_URL'den türetilir (/moderate|/moderator → /chat).
+CATEGORY_EXPERT_CHAT_URL = _resolve_category_expert_chat_url()
+CATEGORY_EXPERT_CHAT_TIMEOUT = config("CATEGORY_EXPERT_CHAT_TIMEOUT", default=120, cast=int)
+CATEGORY_EXPERT_CHAT_BEARER_TOKEN = config("CATEGORY_EXPERT_CHAT_BEARER_TOKEN", default="").strip()
 CATEGORY_EXPERT_MAX_QUESTIONS_PER_USER = config("CATEGORY_EXPERT_MAX_QUESTIONS_PER_USER", default=3, cast=int)
 # all_time | day | month — pencere içinde kullanılan soru sayısı (varsayılan: günlük 3 soru)
 CATEGORY_EXPERT_LIMIT_PERIOD = config("CATEGORY_EXPERT_LIMIT_PERIOD", default="day").strip()

@@ -8,8 +8,18 @@ Ana kategorilere bağlı “uzman” asistan: kullanıcı sorar, yanıt LLM ile 
 # Özelliği aç/kapa
 CATEGORY_EXPERT_ENABLED=False
 
-# LLM: gemini (varsayılan) | stub (test) | myapp.providers.MyProvider
-CATEGORY_EXPERT_LLM_PROVIDER=gemini
+# LLM: moderator_chat (varsayılan, Marifetli moderator /chat) | gemini | stub | myapp.providers.MyProvider
+CATEGORY_EXPERT_LLM_PROVIDER=moderator_chat
+
+# Moderasyon ile aynı moderator servisi (uzman /chat bununla türetilir)
+MODERATION_LLM_URL=https://ornek.railway.app/moderate
+
+# Chat URL: boş bırakılırsa MODERATION_LLM_URL ile aynı sunucuda /moderate veya /moderator → /chat türetilir.
+# Sadece farklı bir adres kullanacaksan:
+# CATEGORY_EXPERT_CHAT_URL=https://...
+CATEGORY_EXPERT_CHAT_TIMEOUT=120
+# İsteğe bağlı: servis Bearer istiyorsa
+# CATEGORY_EXPERT_CHAT_BEARER_TOKEN=
 
 # Kullanıcı başına soru limiti (0 = limitsiz)
 CATEGORY_EXPERT_MAX_QUESTIONS_PER_USER=3
@@ -21,9 +31,9 @@ CATEGORY_EXPERT_LIMIT_PERIOD=day
 # CATEGORY_EXPERT_LIMIT_PERIOD=all_time
 # CATEGORY_EXPERT_ALLOW_LIFETIME_EXPERT_LIMIT=True
 
-# Gemini (gemini sağlayıcısı için; bot ile aynı anahtar)
-GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.0-flash
+# Sadece CATEGORY_EXPERT_LLM_PROVIDER=gemini ise gerekli (bot ile aynı anahtar)
+# GEMINI_API_KEY=
+# GEMINI_MODEL=gemini-2.0-flash
 ```
 
 ## Kurulum
