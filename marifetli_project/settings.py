@@ -308,6 +308,12 @@ KIDS_FRONTEND_URL = config(
 ).strip().rstrip("/")
 # Kids UI ana domain altında /kids ise (örn. localhost:3000/kids) burada "kids" veya "/kids" verin; cocuk.* kökünde boş bırakın.
 KIDS_FRONTEND_PATH_PREFIX = config("KIDS_FRONTEND_PATH_PREFIX", default="").strip().strip("/")
+# Veli davetinde toplu e-posta gönderimini kapatmak için False (yalnızca paylaşılabilir link).
+KIDS_INVITE_EMAIL_ENABLED = config("KIDS_INVITE_EMAIL_ENABLED", default=True, cast=bool)
+# Öğretmen proje formunda "video ile teslim" seçeneği (.env False = yalnızca görsel/adım adım).
+KIDS_ASSIGNMENT_VIDEO_ENABLED = config(
+    "KIDS_ASSIGNMENT_VIDEO_ENABLED", default=True, cast=bool
+)
 # Backend URL - e-posta şablonlarındaki logo vb. mutlak URL'ler için (örn. https://api.marifetli.com.tr)
 BACKEND_URL = config("BACKEND_URL", default="").strip().rstrip("/") or None
 
@@ -554,6 +560,11 @@ CELERY_BEAT_SCHEDULE = {
     "bot-activity-run": {
         "task": "bot_activity.run_bot_activity",
         "schedule": crontab(minute=15, hour="*/4"),  # 00:15, 04:15, 08:15, 12:15, 16:15, 20:15 → günde 6 tur
+    },
+    # Kids: planlanmış proje teslim başlangıcı gelince öğrenci bildirimi (yaklaşık 5 dk gecikme)
+    "kids-notify-assignment-windows": {
+        "task": "kids.tasks.notify_kids_assignment_windows_opened",
+        "schedule": crontab(minute="*/5"),
     },
 }
 

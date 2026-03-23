@@ -8,9 +8,15 @@ from django.utils.html import format_html
 
 def kids_invite_signup_url(token) -> str:
     base = (getattr(settings, "KIDS_FRONTEND_URL", None) or "").strip().rstrip("/")
+    prefix = (getattr(settings, "KIDS_FRONTEND_PATH_PREFIX", None) or "").strip().strip("/")
+    rel = f"/davet/{token}/"
+    if prefix:
+        path = f"/{prefix}{rel}"
+    else:
+        path = rel
     if base:
-        return f"{base}/davet/{token}/"
-    return f"/davet/{token}/"
+        return f"{base}{path}"
+    return path
 
 
 def send_kids_parent_invite_email(
@@ -35,7 +41,7 @@ def send_kids_parent_invite_email(
         "(veya mevcut öğrenci hesabıyla bu sınıfa katılabilirsiniz):</p>"
         "<p>{}</p>"
         "<p>Bu davet yaklaşık <strong>{} gün</strong> geçerlidir.</p>"
-        "<p>Marifetli Kids — çocuklar için güvenli proje ve ödev alanı</p>",
+        "<p>Marifetli Kids — çocuklar için güvenli proje alanı</p>",
         td,
         cn,
         link_block,

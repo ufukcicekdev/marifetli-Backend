@@ -12,6 +12,8 @@ from .models import (
     KidsSchool,
     KidsSubmission,
     KidsUser,
+    KidsUserBadge,
+    MebSchoolDirectory,
 )
 
 
@@ -94,13 +96,27 @@ class KidsInviteAdmin(admin.ModelAdmin):
 
 @admin.register(KidsAssignment)
 class KidsAssignmentAdmin(admin.ModelAdmin):
-    list_display = ("title", "kids_class", "is_published", "video_max_seconds", "created_at")
+    list_display = (
+        "title",
+        "kids_class",
+        "is_published",
+        "video_max_seconds",
+        "max_step_images",
+        "created_at",
+    )
     list_filter = ("is_published", "kids_class")
 
 
 @admin.register(KidsSubmission)
 class KidsSubmissionAdmin(admin.ModelAdmin):
-    list_display = ("assignment", "student", "kind", "created_at")
+    list_display = ("assignment", "student", "kind", "is_teacher_pick", "created_at")
+
+
+@admin.register(KidsUserBadge)
+class KidsUserBadgeAdmin(admin.ModelAdmin):
+    list_display = ("student", "key", "label", "earned_at")
+    search_fields = ("key", "label", "student__email")
+    raw_id_fields = ("student",)
 
 
 @admin.register(KidsFreestylePost)
@@ -121,3 +137,12 @@ class KidsFCMDeviceTokenAdmin(admin.ModelAdmin):
     list_display = ("kids_user", "device_name", "updated_at")
     search_fields = ("token", "kids_user__email")
     raw_id_fields = ("kids_user",)
+
+
+@admin.register(MebSchoolDirectory)
+class MebSchoolDirectoryAdmin(admin.ModelAdmin):
+    list_display = ("province", "district", "name", "yol", "synced_at")
+    list_filter = ("province",)
+    search_fields = ("name", "line_full", "yol", "province", "district")
+    readonly_fields = ("synced_at",)
+    ordering = ("province", "district", "name")

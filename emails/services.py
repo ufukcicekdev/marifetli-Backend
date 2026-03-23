@@ -235,6 +235,30 @@ class EmailService:
             template_type='password_reset',
             context=context
         )
+
+    @staticmethod
+    def send_kids_password_reset_email(kids_user, token: str, reset_url: str):
+        """Marifetli Kids (kids_users) şifre sıfırlama; şablonda user.username kullanılır."""
+
+        class _KidsEmailUser:
+            __slots__ = ("email", "username")
+
+            def __init__(self, ku):
+                self.email = ku.email
+                name = (ku.first_name or "").strip()
+                self.username = name or (
+                    ku.email.split("@", 1)[0] if "@" in ku.email else ku.email
+                )
+
+        return EmailService.send_template_email(
+            recipient=kids_user.email,
+            template_type="password_reset",
+            context={
+                "user": _KidsEmailUser(kids_user),
+                "token": token,
+                "reset_url": reset_url,
+            },
+        )
     
     @staticmethod
     def send_welcome_email(user):

@@ -32,9 +32,9 @@ def kids_notification_relative_path(
     assignment: KidsAssignment | None = None,
     submission: KidsSubmission | None = None,
 ) -> str:
-    """Next.js: `${pathPrefix}${action_path}` (örn. action_path=/ogrenci/odev/3)."""
+    """Next.js: `${pathPrefix}${action_path}` (örn. action_path=/ogrenci/proje/3)."""
     if notification_type == KidsNotification.NotificationType.NEW_ASSIGNMENT and assignment:
-        return _kids_app_path("ogrenci", "odev", str(assignment.pk))
+        return _kids_app_path("ogrenci", "proje", str(assignment.pk))
     if notification_type == KidsNotification.NotificationType.SUBMISSION_RECEIVED and submission:
         cid = submission.assignment.kids_class_id
         return _kids_app_path("ogretmen", "sinif", str(cid))
@@ -112,30 +112,51 @@ def create_kids_notification(
 
 
 def notify_students_new_assignment(assignment_id: int) -> None:
+    """Öğrencilere yeni proje bildirimi; idempotent (students_notified_at). Teslim başlangıcı gelmeden çalışmaz."""
+    from django.db import transaction
+    from django.utils import timezone
+
     try:
-        assignment = KidsAssignment.objects.select_related("kids_class").get(pk=assignment_id)
-    except KidsAssignment.DoesNotExist:
-        return
-    if not assignment.is_published:
-        return
-    class_name = assignment.kids_class.name
-    student_ids = KidsEnrollment.objects.filter(kids_class_id=assignment.kids_class_id).values_list(
-        "student_id", flat=True
-    )
-    students = KidsUser.objects.filter(pk__in=student_ids, role=KidsUserRole.STUDENT)
-    teacher = assignment.kids_class.teacher
-    msg = f"Yeni ödev: {assignment.title} ({class_name})"
-    for student in students:
-        try:
-            create_kids_notification(
-                student,
-                teacher,
-                KidsNotification.NotificationType.NEW_ASSIGNMENT,
-                msg,
-                assignment=assignment,
+        with transaction.atomic():
+            assignment = (
+                KidsAssignment.objects.select_for_update()
+                .filter(pk=assignment_id)
+                .select_related("kids_class", "kids_class__teacher")
+                .first()
             )
-        except Exception:
-            logger.exception("Kids new_assignment notify failed student=%s", student.pk)
+            if not assignment:
+                return
+            if not assignment.is_published:
+                return
+            if assignment.students_notified_at:
+                return
+            now = timezone.now()
+            if assignment.submission_opens_at and now < assignment.submission_opens_at:
+                return
+
+            class_name = assignment.kids_class.name
+            student_ids = KidsEnrollment.objects.filter(
+                kids_class_id=assignment.kids_class_id
+            ).values_list("student_id", flat=True)
+            students = KidsUser.objects.filter(pk__in=student_ids, role=KidsUserRole.STUDENT)
+            teacher = assignment.kids_class.teacher
+            msg = f"Yeni proje: {assignment.title} ({class_name})"
+            for student in students:
+                try:
+                    create_kids_notification(
+                        student,
+                        teacher,
+                        KidsNotification.NotificationType.NEW_ASSIGNMENT,
+                        msg,
+                        assignment=assignment,
+                    )
+                except Exception:
+                    logger.exception("Kids new_assignment notify failed student=%s", student.pk)
+
+            assignment.students_notified_at = now
+            assignment.save(update_fields=["students_notified_at", "updated_at"])
+    except Exception:
+        logger.exception("notify_students_new_assignment failed assignment_id=%s", assignment_id)
 
 
 def notify_teacher_submission_received(submission_id: int) -> None:
@@ -150,7 +171,7 @@ def notify_teacher_submission_received(submission_id: int) -> None:
         return
     teacher = sub.assignment.kids_class.teacher
     student_label = sub.student.full_name or sub.student.email
-    msg = f"{student_label} ödevini teslim etti: {sub.assignment.title}"
+    msg = f"{student_label} projesini teslim etti: {sub.assignment.title}"
     try:
         create_kids_notification(
             teacher,
