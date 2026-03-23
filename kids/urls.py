@@ -13,6 +13,10 @@ urlpatterns = [
     path("classes/", views.KidsClassListCreateView.as_view()),
     path("classes/<int:pk>/", views.KidsClassDetailView.as_view()),
     path("classes/<int:class_id>/students/", views.KidsEnrollmentListView.as_view()),
+    path(
+        "classes/<int:class_id>/students/<int:pk>/",
+        views.KidsEnrollmentDestroyView.as_view(),
+    ),
     path("classes/<int:class_id>/assignments/", views.KidsAssignmentListCreateView.as_view()),
     path("classes/<int:class_id>/weekly-champion/", views.KidsWeeklyChampionView.as_view()),
     path("invites/", views.KidsInviteCreateView.as_view()),

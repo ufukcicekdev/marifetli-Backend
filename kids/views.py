@@ -265,6 +265,13 @@ class KidsClassDetailView(KidsAuthenticatedMixin, APIView):
         obj = self.get_object(request, pk)
         return Response(KidsClassSerializer(obj, context={"request": request}).data)
 
+    def delete(self, request, pk):
+        obj = self.get_object(request, pk)
+        if not obj:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        obj.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class KidsSchoolListCreateView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
@@ -327,6 +334,30 @@ class KidsEnrollmentListView(KidsAuthenticatedMixin, APIView):
         return Response(
             KidsEnrollmentSerializer(qs, many=True, context={"request": request}).data
         )
+
+
+class KidsEnrollmentDestroyView(KidsAuthenticatedMixin, APIView):
+    """Öğretmen: sınıftan öğrenci kaydını kaldırır (öğrenci hesabı silinmez)."""
+
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def delete(self, request, class_id, pk):
+        if not KidsClass.objects.filter(pk=class_id, teacher=request.user).exists():
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        enrollment = KidsEnrollment.objects.filter(pk=pk, kids_class_id=class_id).select_related(
+            "student"
+        ).first()
+        if not enrollment:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        assignment_ids = KidsAssignment.objects.filter(kids_class_id=class_id).values_list(
+            "id", flat=True
+        )
+        KidsSubmission.objects.filter(
+            assignment_id__in=assignment_ids,
+            student_id=enrollment.student_id,
+        ).delete()
+        enrollment.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class KidsInviteCreateView(KidsAuthenticatedMixin, APIView):
