@@ -93,6 +93,13 @@ class KidsSchool(models.Model):
 class KidsClass(models.Model):
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
+    academic_year_label = models.CharField(
+        "eğitim-öğretim yılı",
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="Örn. 2024-2025. Yeni eğitim yılında ayrı sınıf kaydı açıp etiketle ayırmak için.",
+    )
     school = models.ForeignKey(
         KidsSchool,
         on_delete=models.PROTECT,
@@ -181,12 +188,6 @@ class VideoDurationChoice(models.IntegerChoices):
     THREE_MIN = 180, "3 dk"
 
 
-class MaxStepImagesChoice(models.IntegerChoices):
-    ONE = 1, "1 görsel"
-    TWO = 2, "2 görsel"
-    THREE = 3, "3 görsel"
-
-
 class KidsAssignment(models.Model):
     kids_class = models.ForeignKey(
         KidsClass,
@@ -202,10 +203,14 @@ class KidsAssignment(models.Model):
     )
     require_image = models.BooleanField(default=False)
     require_video = models.BooleanField(default=False)
+    submission_rounds = models.PositiveSmallIntegerField(
+        "aynı konu için teslim edilecek proje sayısı",
+        default=1,
+        help_text="Öğrenci bu başlık altında 1–5 ayrı teslim görür (Proje 1, Proje 2, …).",
+    )
     max_step_images = models.PositiveSmallIntegerField(
-        "görsel teslimde en fazla görsel",
-        choices=MaxStepImagesChoice.choices,
-        default=MaxStepImagesChoice.THREE,
+        "görsel teslimde en fazla görsel (teknik üst sınır)",
+        default=1,
     )
     submission_opens_at = models.DateTimeField(
         "teslime başlangıç",
@@ -290,12 +295,22 @@ class KidsSubmission(models.Model):
         null=True,
         blank=True,
     )
+    round_number = models.PositiveSmallIntegerField(
+        default=1,
+        help_text="Bu atama içindeki proje sırası (1..submission_rounds).",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         db_table = "kids_submissions"
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("assignment", "student", "round_number"),
+                name="kids_submission_assignment_student_round_uniq",
+            ),
+        ]
 
 
 class KidsUserBadge(models.Model):

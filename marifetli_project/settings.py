@@ -263,10 +263,24 @@ REST_FRAMEWORK = {
     ],
 }
 
+# JWT / oturum süresi — ana site API (SimpleJWT) ve Kids portal aynı varsayılanları kullanır.
+# Güvenlik: access süresini kısaltmak sızdırılmış token riskini azaltır (.env ile ayarlayın).
+# Varsayılan: access 7 gün, refresh 30 gün (önceki: 60 dk / 7 gün).
+JWT_ACCESS_MINUTES = config(
+    "JWT_ACCESS_MINUTES",
+    default=7 * 24 * 60,  # 7 gün
+    cast=int,
+)
+JWT_REFRESH_DAYS = config(
+    "JWT_REFRESH_DAYS",
+    default=30,
+    cast=int,
+)
+
 # JWT Settings
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=JWT_ACCESS_MINUTES),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=JWT_REFRESH_DAYS),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
@@ -287,17 +301,18 @@ SIMPLE_JWT = {
     "TOKEN_USER_CLASS": "rest_framework_simplejwt.models.TokenUser",
     "JTI_CLAIM": "jti",
     "SLIDING_TOKEN_REFRESH_EXP_CLAIM": "refresh_exp",
-    "SLIDING_TOKEN_LIFETIME": timedelta(minutes=5),
-    "SLIDING_TOKEN_REFRESH_LIFETIME": timedelta(days=1),
+    "SLIDING_TOKEN_LIFETIME": timedelta(minutes=JWT_ACCESS_MINUTES),
+    "SLIDING_TOKEN_REFRESH_LIFETIME": timedelta(days=JWT_REFRESH_DAYS),
 }
 
-# Kids portal JWT — ana site SimpleJWT ile aynı header; `aud` ve `typ` ile ayrılır
+# Kids portal JWT — ana site SimpleJWT ile aynı header; `aud` ve `typ` ile ayrılır.
+# Süre: varsayılan olarak JWT_ACCESS_MINUTES / JWT_REFRESH_DAYS ile aynı; Kids’e özel .env ile override.
 KIDS_JWT_SIGNING_KEY = config("KIDS_JWT_SIGNING_KEY", default=SECRET_KEY)
 KIDS_JWT_ACCESS_LIFETIME = timedelta(
-    minutes=config("KIDS_JWT_ACCESS_MINUTES", default=60, cast=int)
+    minutes=config("KIDS_JWT_ACCESS_MINUTES", default=JWT_ACCESS_MINUTES, cast=int)
 )
 KIDS_JWT_REFRESH_LIFETIME = timedelta(
-    days=config("KIDS_JWT_REFRESH_DAYS", default=7, cast=int)
+    days=config("KIDS_JWT_REFRESH_DAYS", default=JWT_REFRESH_DAYS, cast=int)
 )
 
 # Frontend URL - .env'den (e-posta linkleri, OAuth redirect, CORS için tek kaynak)
@@ -313,6 +328,12 @@ KIDS_INVITE_EMAIL_ENABLED = config("KIDS_INVITE_EMAIL_ENABLED", default=True, ca
 # Öğretmen proje formunda "video ile teslim" seçeneği (.env False = yalnızca görsel/adım adım).
 KIDS_ASSIGNMENT_VIDEO_ENABLED = config(
     "KIDS_ASSIGNMENT_VIDEO_ENABLED", default=True, cast=bool
+)
+# Öğrenci proje teslimi görsel yükleme üst sınırı (MB). Profil fotoğrafı 2 MB ile ayrı kalır.
+KIDS_SUBMISSION_IMAGE_MAX_MB = config(
+    "KIDS_SUBMISSION_IMAGE_MAX_MB",
+    default=25,
+    cast=int,
 )
 # Backend URL - e-posta şablonlarındaki logo vb. mutlak URL'ler için (örn. https://api.marifetli.com.tr)
 BACKEND_URL = config("BACKEND_URL", default="").strip().rstrip("/") or None
@@ -401,6 +422,12 @@ CSRF_COOKIE_SAMESITE = "Lax"
 SESSION_COOKIE_SAMESITE = "Lax"
 # OAuth akışında session'ın kaybolmaması için her istekte kaydet
 SESSION_SAVE_EVERY_REQUEST = True
+# Tarayıcı session çerezi (admin / OAuth ara adımları); saniye cinsinden, varsayılan 30 gün
+SESSION_COOKIE_AGE = config(
+    "SESSION_COOKIE_AGE",
+    default=60 * 60 * 24 * 30,
+    cast=int,
+)
 
 if not DEBUG:
     # Railway proxy SSL'i sonlandırır; container'a HTTP gelir. Redirect kapatıyoruz ki healthcheck 200 alsın.

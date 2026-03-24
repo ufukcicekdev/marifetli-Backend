@@ -2,6 +2,7 @@ from django.utils import timezone
 
 from rest_framework import serializers
 
+from .class_names import normalize_kids_class_name
 from .models import (
     KidsAssignment,
     KidsClass,
@@ -13,7 +14,6 @@ from .models import (
     KidsSubmission,
     KidsUser,
     KidsUserRole,
-    MaxStepImagesChoice,
     VideoDurationChoice,
 )
 from .notifications_service import kids_notification_relative_path
@@ -151,6 +151,7 @@ class KidsClassSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "description",
+            "academic_year_label",
             "school",
             "school_id",
             "teacher",
@@ -166,6 +167,23 @@ class KidsClassSerializer(serializers.ModelSerializer):
         user = getattr(request, "user", None) if request else None
         if user is not None and getattr(user, "is_authenticated", False):
             self.fields["school_id"].queryset = KidsSchool.objects.filter(teacher=user)
+
+    def validate_name(self, value):
+        s = (value or "").strip()
+        if not s:
+            raise serializers.ValidationError("Sınıf adı zorunludur.")
+        normalized = normalize_kids_class_name(s)
+        if len(normalized) > 200:
+            raise serializers.ValidationError("En fazla 200 karakter olabilir.")
+        return normalized
+
+    def validate_academic_year_label(self, value):
+        if value is None or not str(value).strip():
+            return ""
+        s = str(value).strip()
+        if len(s) > 32:
+            raise serializers.ValidationError("En fazla 32 karakter olabilir.")
+        return s
 
     def validate(self, attrs):
         if self.instance is None and attrs.get("school") is None:
@@ -252,6 +270,7 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
     submission_count = serializers.SerializerMethodField()
     enrolled_student_count = serializers.SerializerMethodField()
     my_submission = serializers.SerializerMethodField()
+    my_rounds_progress = serializers.SerializerMethodField()
 
     class Meta:
         model = KidsAssignment
@@ -264,7 +283,7 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
             "video_max_seconds",
             "require_image",
             "require_video",
-            "max_step_images",
+            "submission_rounds",
             "submission_opens_at",
             "submission_closes_at",
             "is_published",
@@ -274,6 +293,7 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
             "submission_count",
             "enrolled_student_count",
             "my_submission",
+            "my_rounds_progress",
         )
         read_only_fields = ("created_at", "updated_at", "students_notified_at")
 
@@ -281,6 +301,10 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
         if self.instance is None and not attrs.get("submission_closes_at"):
             raise serializers.ValidationError(
                 {"submission_closes_at": "Son teslim tarihi zorunludur."}
+            )
+        if self.instance is None and not attrs.get("submission_opens_at"):
+            raise serializers.ValidationError(
+                {"submission_opens_at": "Teslime başlangıç tarihi zorunludur."}
             )
         o = attrs.get("submission_opens_at")
         if o is None and self.instance is not None:
@@ -306,7 +330,17 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
                     {"submission_closes_at": "Son teslim gelecekte olmalıdır."}
                 )
 
-        # Öğrencilere açılmış projede teslim başlangıcı ve max görsel sayısı kilitli
+        if (
+            self.instance is not None
+            and self.context.get("assignment_edit_planned", True)
+            and "submission_opens_at" in attrs
+            and attrs["submission_opens_at"] is None
+        ):
+            raise serializers.ValidationError(
+                {"submission_opens_at": "Teslime başlangıç tarihi zorunludur."}
+            )
+
+        # Öğrencilere açılmış projede teslim başlangıcı ve proje tur sayısı kilitli
         if self.instance is not None and not self.context.get("assignment_edit_planned", True):
             if "submission_opens_at" in attrs:
                 cur = self.instance.submission_opens_at
@@ -319,11 +353,11 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
                             )
                         }
                     )
-            if "max_step_images" in attrs and attrs["max_step_images"] != self.instance.max_step_images:
+            if "submission_rounds" in attrs and attrs["submission_rounds"] != self.instance.submission_rounds:
                 raise serializers.ValidationError(
                     {
-                        "max_step_images": (
-                            "Bu proje yayındayken en fazla görsel sayısı değiştirilemez."
+                        "submission_rounds": (
+                            "Bu proje yayındayken teslim edilecek proje sayısı değiştirilemez."
                         )
                     }
                 )
@@ -339,10 +373,11 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
         return v if v is not None else None
 
     def get_my_submission(self, obj):
-        m = self.context.get("student_submission_map") or {}
-        sub = m.get(obj.id)
-        if not sub:
+        groups = self.context.get("student_submissions_by_assignment") or {}
+        subs = groups.get(obj.id) or []
+        if not subs:
             return None
+        sub = max(subs, key=lambda s: s.round_number)
         hint = kids_submission_review_hint(sub)
         return {
             "id": sub.id,
@@ -355,12 +390,23 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
             "review_hint_code": hint.get("code") or "",
         }
 
+    def get_my_rounds_progress(self, obj):
+        if not self.context.get("for_student"):
+            return None
+        groups = self.context.get("student_submissions_by_assignment") or {}
+        subs = groups.get(obj.id) or []
+        return {
+            "submitted": len(subs),
+            "total": int(obj.submission_rounds or 1),
+        }
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
         if self.context.get("for_student"):
             data.pop("students_notified_at", None)
         else:
             data.pop("my_submission", None)
+            data.pop("my_rounds_progress", None)
         return data
 
     def validate_video_max_seconds(self, value):
@@ -369,10 +415,9 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Video süresi 60, 120 veya 180 saniye olmalı.")
         return value
 
-    def validate_max_step_images(self, value):
-        allowed = {c.value for c in MaxStepImagesChoice}
-        if value not in allowed:
-            raise serializers.ValidationError("Görsel sayısı 1, 2 veya 3 olmalı.")
+    def validate_submission_rounds(self, value):
+        if value < 1 or value > 5:
+            raise serializers.ValidationError("Proje sayısı 1 ile 5 arasında olmalıdır.")
         return value
 
 
@@ -384,6 +429,7 @@ class KidsAssignmentBriefSerializer(serializers.ModelSerializer):
 
 class KidsSubmissionSerializer(serializers.ModelSerializer):
     review_hint = serializers.SerializerMethodField()
+    round_number = serializers.IntegerField(required=False, min_value=1, default=1)
 
     class Meta:
         model = KidsSubmission
@@ -391,6 +437,7 @@ class KidsSubmissionSerializer(serializers.ModelSerializer):
             "id",
             "assignment",
             "student",
+            "round_number",
             "kind",
             "steps_payload",
             "video_url",
@@ -417,6 +464,23 @@ class KidsSubmissionSerializer(serializers.ModelSerializer):
             "teacher_picked_at",
             "review_hint",
         )
+
+    def validate(self, attrs):
+        assignment = attrs.get("assignment")
+        rn = attrs.get("round_number")
+        if rn is None:
+            rn = 1
+        rn = int(rn)
+        if assignment is not None:
+            mx = int(assignment.submission_rounds or 1)
+            if rn < 1 or rn > mx:
+                raise serializers.ValidationError(
+                    {
+                        "round_number": f"Proje numarası 1–{mx} arasında olmalıdır.",
+                    }
+                )
+        attrs["round_number"] = rn
+        return attrs
 
     def get_review_hint(self, obj):
         return kids_submission_review_hint(obj)
@@ -495,6 +559,7 @@ class KidsTeacherSubmissionSerializer(serializers.ModelSerializer):
             "id",
             "assignment",
             "student",
+            "round_number",
             "kind",
             "steps_payload",
             "video_url",

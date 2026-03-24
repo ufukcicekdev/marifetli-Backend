@@ -76,8 +76,8 @@ class KidsSchoolAdmin(admin.ModelAdmin):
 
 @admin.register(KidsClass)
 class KidsClassAdmin(admin.ModelAdmin):
-    list_display = ("name", "school", "teacher", "created_at")
-    search_fields = ("name", "teacher__email", "school__name")
+    list_display = ("name", "academic_year_label", "school", "teacher", "created_at")
+    search_fields = ("name", "academic_year_label", "teacher__email", "school__name")
     list_filter = ("teacher", "school")
 
 
@@ -101,7 +101,7 @@ class KidsAssignmentAdmin(admin.ModelAdmin):
         "kids_class",
         "is_published",
         "video_max_seconds",
-        "max_step_images",
+        "submission_rounds",
         "created_at",
     )
     list_filter = ("is_published", "kids_class")
@@ -109,7 +109,7 @@ class KidsAssignmentAdmin(admin.ModelAdmin):
 
 @admin.register(KidsSubmission)
 class KidsSubmissionAdmin(admin.ModelAdmin):
-    list_display = ("assignment", "student", "kind", "is_teacher_pick", "created_at")
+    list_display = ("assignment", "student", "round_number", "kind", "is_teacher_pick", "created_at")
 
 
 @admin.register(KidsUserBadge)

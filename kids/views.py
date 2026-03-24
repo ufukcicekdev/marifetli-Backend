@@ -90,6 +90,14 @@ _ALLOWED_PROFILE_PHOTO_TYPES = frozenset({"image/jpeg", "image/png", "image/webp
 _ALLOWED_SUBMISSION_IMAGE_EXT = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 
 
+def _max_submission_image_bytes() -> int:
+    mb = max(1, int(getattr(settings, "KIDS_SUBMISSION_IMAGE_MAX_MB", 25)))
+    return mb * 1024 * 1024
+
+# Öğretmen artık görsel üst sınırı seçmez; her teslimde teknik üst sınır (tek görsel).
+KIDS_MAX_IMAGES_PER_SUBMISSION = 1
+
+
 def _steps_image_urls_from_payload(payload):
     if not isinstance(payload, dict):
         return None
@@ -180,7 +188,7 @@ def _validate_kids_submission_for_assignment(assignment, kind, steps_payload, vi
             imgs = _steps_image_urls_from_payload(steps_payload)
             if imgs is None:
                 return "Görseller geçersiz formatta."
-            mx = assignment.max_step_images
+            mx = KIDS_MAX_IMAGES_PER_SUBMISSION
             if len(imgs) < 1:
                 return f"En az 1 görsel ekleyin (en fazla {mx})."
             if len(imgs) > mx:
@@ -388,7 +396,7 @@ class KidsProfilePhotoView(KidsAuthenticatedMixin, APIView):
 
 
 class KidsStudentSubmissionImageUploadView(KidsAuthenticatedMixin, APIView):
-    """Öğrenci proje görseli: multipart alan `image` — JPEG, PNG veya WebP, en fazla 2 MB."""
+    """Öğrenci proje görseli: multipart alan `image` — JPEG, PNG veya WebP (üst sınır: settings.KIDS_SUBMISSION_IMAGE_MAX_MB)."""
 
     permission_classes = [IsAuthenticated]
 
@@ -401,9 +409,11 @@ class KidsStudentSubmissionImageUploadView(KidsAuthenticatedMixin, APIView):
                 {"detail": "Görsel dosyası gerekli (image)."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if f.size > _MAX_PROFILE_PHOTO_BYTES:
+        max_b = _max_submission_image_bytes()
+        if f.size > max_b:
+            mb = max_b // (1024 * 1024)
             return Response(
-                {"detail": "Dosya en fazla 2 MB olabilir."},
+                {"detail": f"Görsel çok büyük (en fazla {mb} MB)."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         ctype = (getattr(f, "content_type", "") or "").lower()
@@ -861,7 +871,7 @@ class KidsAssignmentListCreateView(KidsAuthenticatedMixin, APIView):
 
 
 class KidsAssignmentDetailPatchView(KidsAuthenticatedMixin, APIView):
-    """Öğretmen: proje güncelle. Yayındakilerde teslim başlangıcı ve max görsel sayısı değişmez."""
+    """Öğretmen: proje güncelle. Yayındakilerde teslim başlangıcı ve proje (round) sayısı değişmez."""
 
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
@@ -942,7 +952,7 @@ class KidsAssignmentSubmissionsDetailView(KidsAuthenticatedMixin, APIView):
         qs = (
             KidsSubmission.objects.filter(assignment=assignment)
             .select_related("student", "assignment")
-            .order_by("-created_at")
+            .order_by("student__first_name", "student__last_name", "student_id", "round_number", "-id")
         )
         pick_count = KidsSubmission.objects.filter(
             assignment=assignment, is_teacher_pick=True
@@ -987,7 +997,14 @@ class KidsClassSubmissionListView(KidsAuthenticatedMixin, APIView):
         qs = (
             KidsSubmission.objects.filter(assignment__kids_class_id=class_id)
             .select_related("student", "assignment")
-            .order_by("-created_at")
+            .order_by(
+                "assignment_id",
+                "student__first_name",
+                "student__last_name",
+                "student_id",
+                "round_number",
+                "-id",
+            )
         )
         ser = KidsTeacherSubmissionSerializer(qs, many=True, context={"request": request})
         return Response(ser.data)
@@ -1017,15 +1034,16 @@ class KidsStudentDashboardView(KidsAuthenticatedMixin, APIView):
         )
         assignment_list = list(assignments_qs)
         aid_list = [a.id for a in assignment_list]
-        sub_map = {}
+        sub_groups = {}
         if aid_list:
             subs = KidsSubmission.objects.filter(
                 student=request.user, assignment_id__in=aid_list
-            ).order_by("assignment_id", "-id")
+            ).order_by("assignment_id", "round_number", "-id")
             for sub in subs:
-                a_id = sub.assignment_id
-                if a_id not in sub_map:
-                    sub_map[a_id] = sub
+                aid = sub.assignment_id
+                sub_groups.setdefault(aid, []).append(sub)
+            for aid in sub_groups:
+                sub_groups[aid].sort(key=lambda s: s.round_number)
         class_qs = KidsClass.objects.filter(id__in=class_ids).select_related("school")
         return Response(
             {
@@ -1040,7 +1058,7 @@ class KidsStudentDashboardView(KidsAuthenticatedMixin, APIView):
                     context={
                         "request": request,
                         "for_student": True,
-                        "student_submission_map": sub_map,
+                        "student_submissions_by_assignment": sub_groups,
                     },
                 ).data,
             }
@@ -1080,11 +1098,12 @@ class KidsSubmissionCreateView(KidsAuthenticatedMixin, APIView):
         )
         if err:
             return Response({"detail": err}, status=status.HTTP_400_BAD_REQUEST)
-        existing = (
-            KidsSubmission.objects.filter(student=request.user, assignment=assignment)
-            .order_by("-id")
-            .first()
-        )
+        round_number = int(ser.validated_data.get("round_number") or 1)
+        existing = KidsSubmission.objects.filter(
+            student=request.user,
+            assignment=assignment,
+            round_number=round_number,
+        ).first()
         if existing and existing.teacher_reviewed_at:
             return Response(
                 {"detail": "Bu teslim değerlendirildi; içerik artık değiştirilemez."},
@@ -1102,6 +1121,7 @@ class KidsSubmissionCreateView(KidsAuthenticatedMixin, APIView):
         sub = KidsSubmission.objects.create(
             assignment=assignment,
             student=request.user,
+            round_number=round_number,
             kind=kind,
             steps_payload=steps_payload,
             video_url=video_url,
@@ -1151,15 +1171,25 @@ class KidsStudentSubmissionForAssignmentView(KidsAuthenticatedMixin, APIView):
                 {"detail": "Bu proje henüz öğrencilere açılmadı (teslim başlangıcı gelince listede görünür)."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        sub = (
-            KidsSubmission.objects.filter(student=request.user, assignment=assignment)
-            .order_by("-id")
-            .first()
-        )
-        if not sub:
-            return Response({"submission": None})
+        total = int(assignment.submission_rounds or 1)
+        rounds_out = []
+        for r in range(1, total + 1):
+            sub = KidsSubmission.objects.filter(
+                student=request.user,
+                assignment=assignment,
+                round_number=r,
+            ).first()
+            rounds_out.append(
+                {
+                    "round_number": r,
+                    "submission": KidsSubmissionSerializer(sub).data if sub else None,
+                }
+            )
         return Response(
-            {"submission": KidsSubmissionSerializer(sub).data},
+            {
+                "submission_rounds": total,
+                "rounds": rounds_out,
+            }
         )
 
 
