@@ -3,6 +3,9 @@ from django.contrib import admin
 
 from .models import (
     KidsAssignment,
+    KidsChallenge,
+    KidsChallengeInvite,
+    KidsChallengeMember,
     KidsClass,
     KidsEnrollment,
     KidsFCMDeviceToken,
@@ -24,12 +27,22 @@ class KidsUserAdminForm(forms.ModelForm):
         label="Şifre",
         required=False,
         widget=forms.PasswordInput(attrs={"autocomplete": "new-password"}),
-        help_text="Yeni öğretmen eklerken doldurun. Boş bırakırsanız mevcut şifre değişmez.",
+        help_text="Yeni öğrenci eklerken doldurun. Boş bırakırsanız mevcut şifre değişmez.",
     )
 
     class Meta:
         model = KidsUser
-        fields = ("email", "first_name", "last_name", "profile_picture", "role", "is_active")
+        fields = (
+            "email",
+            "first_name",
+            "last_name",
+            "phone",
+            "profile_picture",
+            "role",
+            "is_active",
+            "parent_account",
+            "student_login_name",
+        )
 
     def clean(self):
         cleaned = super().clean()
@@ -50,7 +63,16 @@ class KidsUserAdminForm(forms.ModelForm):
 @admin.register(KidsUser)
 class KidsUserAdmin(admin.ModelAdmin):
     form = KidsUserAdminForm
-    list_display = ("email", "first_name", "last_name", "role", "is_active", "created_at")
+    list_display = (
+        "email",
+        "first_name",
+        "last_name",
+        "role",
+        "phone",
+        "student_login_name",
+        "is_active",
+        "created_at",
+    )
     list_filter = ("role", "is_active")
     search_fields = ("email", "first_name", "last_name")
     ordering = ("-created_at",)
@@ -58,7 +80,21 @@ class KidsUserAdmin(admin.ModelAdmin):
 
     fieldsets = (
         (None, {"fields": ("email", "raw_password", "password_display")}),
-        ("Profil", {"fields": ("first_name", "last_name", "profile_picture", "role", "is_active")}),
+        (
+            "Profil",
+            {
+                "fields": (
+                    "first_name",
+                    "last_name",
+                    "phone",
+                    "profile_picture",
+                    "role",
+                    "is_active",
+                    "parent_account",
+                    "student_login_name",
+                )
+            },
+        ),
         ("Tarihler", {"fields": ("created_at", "updated_at")}),
     )
 
@@ -124,19 +160,56 @@ class KidsFreestylePostAdmin(admin.ModelAdmin):
     list_display = ("title", "student", "is_visible", "created_at")
 
 
+@admin.register(KidsChallenge)
+class KidsChallengeAdmin(admin.ModelAdmin):
+    list_display = ("title", "kids_class", "peer_scope", "source", "status", "submission_rounds", "created_at")
+    list_filter = ("source", "status", "peer_scope", "kids_class")
+    search_fields = ("title", "description")
+    raw_id_fields = ("kids_class", "created_by_student", "created_by_teacher", "reviewed_by")
+
+
+@admin.register(KidsChallengeMember)
+class KidsChallengeMemberAdmin(admin.ModelAdmin):
+    list_display = ("challenge", "student", "is_initiator", "joined_at")
+    list_filter = ("is_initiator",)
+    raw_id_fields = ("challenge", "student")
+
+
+@admin.register(KidsChallengeInvite)
+class KidsChallengeInviteAdmin(admin.ModelAdmin):
+    list_display = ("challenge", "inviter", "invitee", "status", "created_at")
+    list_filter = ("status",)
+    raw_id_fields = ("challenge", "inviter", "invitee")
+
+
 @admin.register(KidsNotification)
 class KidsNotificationAdmin(admin.ModelAdmin):
-    list_display = ("notification_type", "recipient", "is_read", "created_at")
+    list_display = (
+        "notification_type",
+        "recipient_student",
+        "recipient_user",
+        "is_read",
+        "created_at",
+    )
     list_filter = ("notification_type", "is_read")
-    search_fields = ("message", "recipient__email")
-    raw_id_fields = ("recipient", "sender", "assignment", "submission")
+    search_fields = ("message", "recipient_student__email", "recipient_user__email")
+    raw_id_fields = (
+        "recipient_student",
+        "recipient_user",
+        "sender_student",
+        "sender_user",
+        "assignment",
+        "submission",
+        "challenge",
+        "challenge_invite",
+    )
 
 
 @admin.register(KidsFCMDeviceToken)
 class KidsFCMDeviceTokenAdmin(admin.ModelAdmin):
-    list_display = ("kids_user", "device_name", "updated_at")
-    search_fields = ("token", "kids_user__email")
-    raw_id_fields = ("kids_user",)
+    list_display = ("kids_user", "user", "device_name", "updated_at")
+    search_fields = ("token", "kids_user__email", "user__email")
+    raw_id_fields = ("kids_user", "user")
 
 
 @admin.register(MebSchoolDirectory)

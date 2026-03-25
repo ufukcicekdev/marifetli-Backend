@@ -15,6 +15,7 @@ Centralized email service for handling all email communications in the Marifetli
   - Answer Notifications
   - Comment Notifications
   - Follow Notifications
+  - Marifetli Kids — öğretmen hesabı (geçici şifre)
 
 ## Setup
 
@@ -53,6 +54,15 @@ EmailService.send_welcome_email(user)
 
 # Send notification email
 EmailService.send_notification_email(user, subject, message)
+
+# Kids admin: yeni öğretmen + geçici şifre (şablon: kids_teacher_welcome)
+EmailService.send_kids_teacher_welcome_email(
+    to_email='...',
+    first_name='...',
+    temp_password='...',
+    login_url='...',
+    reset_hint_url='...',
+)
 
 # Send custom email
 EmailService.send_email(
@@ -115,6 +125,7 @@ HTML templates are located in:
 - `emails/templates/emails/password_reset_email.html`
 - `emails/templates/emails/welcome_email.html`
 - `emails/templates/emails/notification_email.html`
+- `emails/templates/emails/kids_teacher_welcome_email.html`
 
 ## Best Practices
 

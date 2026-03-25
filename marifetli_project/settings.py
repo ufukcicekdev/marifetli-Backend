@@ -32,9 +32,6 @@ DEBUG = config("DEBUG", default=False, cast=bool)
 ALLOWED_HOSTS = list(config("ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv()))
 if "healthcheck.railway.app" not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append("healthcheck.railway.app")
-# Kids frontend (aynı backend); Host header ile gelen istekler için
-if "cocuk.marifetli.com.tr" not in ALLOWED_HOSTS:
-    ALLOWED_HOSTS.append("cocuk.marifetli.com.tr")
 
 
 # Application definition
@@ -317,12 +314,12 @@ KIDS_JWT_REFRESH_LIFETIME = timedelta(
 
 # Frontend URL - .env'den (e-posta linkleri, OAuth redirect, CORS için tek kaynak)
 FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:3000")
-# Marifetli Kids (cocuk.marifetli.com.tr) — CORS/CSRF ve davet linkleri
+# Marifetli Kids (/kids) — CORS/CSRF ve davet linkleri
 KIDS_FRONTEND_URL = config(
-    "KIDS_FRONTEND_URL", default="https://cocuk.marifetli.com.tr"
+    "KIDS_FRONTEND_URL", default="https://marifetli.com.tr"
 ).strip().rstrip("/")
-# Kids UI ana domain altında /kids ise (örn. localhost:3000/kids) burada "kids" veya "/kids" verin; cocuk.* kökünde boş bırakın.
-KIDS_FRONTEND_PATH_PREFIX = config("KIDS_FRONTEND_PATH_PREFIX", default="").strip().strip("/")
+# Kids UI ana domain altında /kids.
+KIDS_FRONTEND_PATH_PREFIX = config("KIDS_FRONTEND_PATH_PREFIX", default="kids").strip().strip("/")
 # Veli davetinde toplu e-posta gönderimini kapatmak için False (yalnızca paylaşılabilir link).
 KIDS_INVITE_EMAIL_ENABLED = config("KIDS_INVITE_EMAIL_ENABLED", default=True, cast=bool)
 # Öğretmen proje formunda "video ile teslim" seçeneği (.env False = yalnızca görsel/adım adım).
@@ -334,6 +331,17 @@ KIDS_SUBMISSION_IMAGE_MAX_MB = config(
     "KIDS_SUBMISSION_IMAGE_MAX_MB",
     default=25,
     cast=int,
+)
+# Öğrenci kaynaklı challenge önerisi (aynı sınıf): .env ile kapatılabilir veya pencere değiştirilebilir.
+# INTERVAL_DAYS=0 → takvim ayı (her ay başı sıfırlanır). >0 → son X gün içinde en fazla MAX_STARTS öneri.
+KIDS_CHALLENGE_STUDENT_START_LIMIT_ENABLED = config(
+    "KIDS_CHALLENGE_STUDENT_START_LIMIT_ENABLED", default=True, cast=bool
+)
+KIDS_CHALLENGE_STUDENT_START_INTERVAL_DAYS = config(
+    "KIDS_CHALLENGE_STUDENT_START_INTERVAL_DAYS", default=0, cast=int
+)
+KIDS_CHALLENGE_STUDENT_MAX_STARTS_PER_WINDOW = config(
+    "KIDS_CHALLENGE_STUDENT_MAX_STARTS_PER_WINDOW", default=1, cast=int
 )
 # Backend URL - e-posta şablonlarındaki logo vb. mutlak URL'ler için (örn. https://api.marifetli.com.tr)
 BACKEND_URL = config("BACKEND_URL", default="").strip().rstrip("/") or None

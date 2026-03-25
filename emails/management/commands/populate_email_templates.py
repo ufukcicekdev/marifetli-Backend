@@ -56,4 +56,25 @@ class Command(BaseCommand):
             }
         )
 
+        # Marifetli Kids — admin tarafından oluşturulan öğretmen (geçici şifre)
+        EmailTemplate.objects.get_or_create(
+            template_type='kids_teacher_welcome',
+            defaults={
+                'name': 'Marifetli Kids Öğretmen Hoş Geldin',
+                'subject': 'Marifetli Kids — Öğretmen hesabınız hazır',
+                'html_content': 'emails/kids_teacher_welcome_email.html',
+                'text_content': (
+                    'Merhaba {display_name},\n\n'
+                    'Marifetli Kids öğretmen hesabınız oluşturuldu.\n\n'
+                    'Giriş e-postası: {teacher_email}\n'
+                    'Geçici şifre: {temp_password}\n\n'
+                    'Giriş: {login_url}\n\n'
+                    'İlk girişten sonra şifrenizi değiştirmeniz önerilir. '
+                    'Giriş ekranındaki "Şifremi unuttum" akışı: {reset_hint_url}\n\n'
+                    'Marifetli Kids'
+                ),
+                'is_active': True,
+            },
+        )
+
         self.stdout.write(self.style.SUCCESS('Successfully populated email templates!'))

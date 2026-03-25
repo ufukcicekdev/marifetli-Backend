@@ -1,4 +1,7 @@
 import logging
+import re
+import secrets
+import unicodedata
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -8,10 +11,13 @@ from django.core.files.storage import default_storage
 from django.db import transaction
 from django.db.models import Count, F, Q
 from django.utils import timezone
+from emails.services import EmailService
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from .badges import (
     MAX_TEACHER_PICKS_PER_ASSIGNMENT,
@@ -20,10 +26,13 @@ from .badges import (
     sync_growth_milestone_badges,
     try_award_first_submit_badge,
 )
-from .authentication import KidsJWTAuthentication
-from .jwt_utils import kids_encode_token, kids_decode_token
+from .auth_utils import is_kids_student_user, is_main_user, may_access_kids_with_main_jwt
+from .authentication import KidsJWTAuthentication, KidsOrMainSiteStaffJWTAuthentication
+from .jwt_utils import kids_decode_token, kids_encode_token
+from .main_site_bridge import provision_kids_parent_user, unique_username_from_email
 from .models import (
     KidsAssignment,
+    KidsChallengeMember,
     KidsClass,
     KidsEnrollment,
     KidsFCMDeviceToken,
@@ -33,11 +42,12 @@ from .models import (
     KidsSchool,
     KidsSubmission,
     KidsUser,
+    KidsUserBadge,
     KidsUserRole,
     MebSchoolDirectory,
 )
 from .notifications_service import notify_students_new_assignment, notify_teacher_submission_received
-from .permissions import IsKidsTeacherOrAdmin
+from .permissions import IsKidsAdmin, IsKidsParent, IsKidsTeacherOrAdmin
 
 logger = logging.getLogger(__name__)
 
@@ -51,18 +61,54 @@ def _kids_password_reset_abs_url(token: str) -> str:
     else:
         path = f"/{tail}"
     return f"{base}{path}" if base else path
+
+
+def _kids_login_abs_url(tab: str | None = None) -> str:
+    base = (getattr(settings, "KIDS_FRONTEND_URL", None) or "").strip().rstrip("/")
+    prefix = (getattr(settings, "KIDS_FRONTEND_PATH_PREFIX", None) or "").strip().strip("/")
+    root = f"/{prefix}" if prefix else ""
+    slug = tab or "1"
+    path = f"{root}?giris={slug}"
+    return f"{base}{path}" if base else path
+
+
+def _random_temp_password(length: int = 12) -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%*-_"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def _send_kids_teacher_welcome_email(
+    *,
+    to_email: str,
+    first_name: str,
+    temp_password: str,
+) -> tuple[bool, str | None]:
+    login_url = _kids_login_abs_url("ogretmen")
+    reset_hint_url = _kids_login_abs_url("ogretmen")
+    sent = EmailService.send_kids_teacher_welcome_email(
+        to_email=to_email,
+        first_name=first_name,
+        temp_password=temp_password,
+        login_url=login_url,
+        reset_hint_url=reset_hint_url,
+    )
+    if sent and getattr(sent, "status", None) == "sent":
+        return True, None
+    return False, getattr(sent, "error_message", None) or "E-posta gönderilemedi"
 from .meb_directory import split_line_full_location
 from .turkey_il_plaka import (
     il_name_to_plaka_int,
     il_plaka_db_variants,
     province_name_from_il_plaka_raw,
 )
-from emails.services import EmailService
+from users.models import KidsPortalRole
+from users.models import User as MainUser
 from users.utils import generate_verification_token
 
 from .serializers import (
     _absolute_media_url,
-    KidsAcceptInviteSerializer,
+    KidsAcceptInviteFamilySerializer,
+    KidsAcceptInviteLegacySerializer,
     KidsClassInviteLinkSerializer,
     KidsAssignmentSerializer,
     KidsClassSerializer,
@@ -78,11 +124,376 @@ from .serializers import (
     KidsTeacherSubmissionSerializer,
     KidsUserProfileUpdateSerializer,
     KidsUserSerializer,
+    kids_user_growth_stage,
 )
 
 
 def _kids_user_payload(user: KidsUser, request) -> dict:
     return KidsUserSerializer(user, context={"request": request}).data
+
+
+def _map_user_to_api_role(u: MainUser) -> str:
+    if u.is_superuser or u.is_staff:
+        return "admin"
+    r = (u.kids_portal_role or "").strip()
+    if r == KidsPortalRole.KIDS_ADMIN:
+        return "admin"
+    if r == KidsPortalRole.TEACHER:
+        return "teacher"
+    if r == KidsPortalRole.PARENT:
+        return "parent"
+    return "teacher"
+
+
+def _account_kids_payload(u: MainUser, request) -> dict:
+    linked = None
+    if (u.kids_portal_role or "").strip() == KidsPortalRole.PARENT:
+        qs = KidsUser.objects.filter(parent_account=u, is_active=True).order_by(
+            "first_name", "last_name", "id"
+        )
+        linked = [
+            {
+                "id": s.id,
+                "first_name": s.first_name,
+                "last_name": s.last_name,
+                "student_login_name": s.student_login_name,
+            }
+            for s in qs
+        ]
+    return {
+        "id": u.id,
+        "email": u.email,
+        "first_name": u.first_name or "",
+        "last_name": u.last_name or "",
+        "role": _map_user_to_api_role(u),
+        "created_at": u.date_joined.isoformat() if hasattr(u, "date_joined") and u.date_joined else "",
+        "profile_picture": None,
+        "growth_points": 0,
+        "growth_stage": None,
+        "student_login_name": None,
+        "phone": None,
+        "linked_students": linked,
+    }
+
+
+def _issue_login_tokens(actor: KidsUser | MainUser, raw_password: str) -> tuple[str, str, str]:
+    if isinstance(actor, KidsUser):
+        return (
+            kids_encode_token(actor.id, token_type="access"),
+            kids_encode_token(actor.id, token_type="refresh"),
+            "kids",
+        )
+    ref = RefreshToken.for_user(actor)
+    return str(ref.access_token), str(ref), "main_site"
+
+
+def _parent_child_overview_dict(student: KidsUser) -> dict:
+    """Veli paneli: çocuğun sınıfları, rozetleri, proje ve yarışma özeti (salt okunur)."""
+    class_ids = list(
+        KidsEnrollment.objects.filter(student=student).values_list("kids_class_id", flat=True)
+    )
+    classes_data = []
+    if class_ids:
+        for kc in KidsClass.objects.filter(id__in=class_ids).select_related("school").order_by("name"):
+            classes_data.append(
+                {
+                    "id": kc.id,
+                    "name": kc.name,
+                    "school_name": kc.school.name if kc.school else "",
+                }
+            )
+
+    badges_raw = list(
+        KidsUserBadge.objects.filter(student=student)
+        .order_by("-earned_at")[:24]
+        .values("key", "label", "earned_at")
+    )
+    for b in badges_raw:
+        ea = b.get("earned_at")
+        if ea is not None:
+            b["earned_at"] = ea.isoformat()
+
+    challenges_data = []
+    for m in (
+        KidsChallengeMember.objects.filter(student=student)
+        .select_related("challenge", "challenge__kids_class")
+        .order_by("-joined_at")[:12]
+    ):
+        ch = m.challenge
+        kc = ch.kids_class
+        challenges_data.append(
+            {
+                "title": ch.title,
+                "status": ch.status,
+                "class_name": kc.name if kc else "Serbest",
+                "peer_scope": getattr(ch, "peer_scope", "class_peer"),
+                "is_initiator": m.is_initiator,
+            }
+        )
+
+    assignments_out = []
+    now = timezone.now()
+    if class_ids:
+        assignments_qs = (
+            KidsAssignment.objects.filter(
+                kids_class_id__in=class_ids,
+                is_published=True,
+            )
+            .filter(Q(submission_opens_at__isnull=True) | Q(submission_opens_at__lte=now))
+            .select_related("kids_class")
+            .order_by(F("submission_closes_at").desc(nulls_last=True), "-id")[:30]
+        )
+        aid_list = [a.id for a in assignments_qs]
+        sub_by_assignment: dict[int, list] = {}
+        if aid_list:
+            subs = KidsSubmission.objects.filter(
+                student=student, assignment_id__in=aid_list
+            ).order_by("assignment_id", "round_number", "-id")
+            for sub in subs:
+                sub_by_assignment.setdefault(sub.assignment_id, []).append(sub)
+        for a in assignments_qs:
+            subs = sub_by_assignment.get(a.id, [])
+            rounds_submitted = len({s.round_number for s in subs})
+            awaiting_feedback = any(s.teacher_reviewed_at is None for s in subs) if subs else False
+            last_note = None
+            reviewed = [s for s in subs if s.teacher_reviewed_at]
+            if reviewed:
+                last_r = max(reviewed, key=lambda s: s.teacher_reviewed_at or timezone.now())
+                note = (last_r.teacher_note_to_student or "").strip()
+                if note:
+                    last_note = note[:280]
+            closes = a.submission_closes_at.isoformat() if a.submission_closes_at else None
+            assignments_out.append(
+                {
+                    "id": a.id,
+                    "title": a.title,
+                    "class_name": a.kids_class.name,
+                    "submission_closes_at": closes,
+                    "submission_rounds": a.submission_rounds,
+                    "rounds_submitted": rounds_submitted,
+                    "has_submissions": bool(subs),
+                    "awaiting_teacher_feedback": awaiting_feedback,
+                    "teacher_feedback_preview": last_note,
+                    "got_teacher_star": any(s.is_teacher_pick for s in subs),
+                }
+            )
+
+    pending_parent_actions: list[dict] = []
+    # İleride: yükleme onayı vb. { "type": "...", "title": "...", "ref_id": ... }
+
+    return {
+        "id": student.id,
+        "first_name": student.first_name,
+        "last_name": student.last_name,
+        "student_login_name": student.student_login_name,
+        "growth_points": int(student.growth_points or 0),
+        "growth_stage": kids_user_growth_stage(student),
+        "classes": classes_data,
+        "badges": badges_raw,
+        "assignments_recent": assignments_out,
+        "challenges": challenges_data,
+        "pending_parent_actions": pending_parent_actions,
+    }
+
+
+def _ascii_slug_part(s: str) -> str:
+    t = unicodedata.normalize("NFKD", (s or "")).encode("ascii", "ignore").decode("ascii").lower()
+    t = re.sub(r"[^a-z0-9]+", "_", t).strip("_")
+    return (t[:20] if t else "ogrenci")
+
+
+def _generate_unique_student_login_name(first: str, last: str) -> str:
+    for _ in range(80):
+        suf = uuid.uuid4().hex[:4]
+        base = f"{_ascii_slug_part(first)}_{_ascii_slug_part(last)}".strip("_") or "ogrenci"
+        base = base[:28]
+        cand = f"{base}_{suf}"[:40]
+        if not KidsUser.objects.filter(student_login_name__iexact=cand).exists():
+            return cand
+    return f"{_ascii_slug_part(first)}_{uuid.uuid4().hex}"[:40]
+
+
+def _invite_email_normalized(invite: KidsInvite, data: dict) -> str | None:
+    if invite.is_class_link:
+        email_raw = (data.get("email") or "").strip()
+        return email_raw.lower() if email_raw else None
+    return (invite.parent_email or "").strip().lower() or None
+
+
+def _accept_invite_legacy(request, invite: KidsInvite, data: dict) -> Response:
+    if not invite or not invite.is_valid():
+        return Response(
+            {"detail": "Davet geçersiz veya süresi dolmuş."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    email_norm = _invite_email_normalized(invite, data)
+    if not email_norm:
+        return Response(
+            {"detail": "Öğrenci e-postası gerekli."}
+            if invite.is_class_link
+            else {"detail": "Davet geçersiz."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    existing = KidsUser.objects.filter(email__iexact=email_norm).first()
+    if existing:
+        if existing.role != KidsUserRole.STUDENT:
+            return Response(
+                {"detail": "Bu e-posta başka bir rol ile kayıtlı."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not existing.check_password(data["password"]):
+            return Response(
+                {"detail": "Şifre hatalı."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if KidsEnrollment.objects.filter(
+            kids_class=invite.kids_class, student=existing
+        ).exists():
+            return Response(
+                {"detail": "Bu sınıfa zaten kayıtlısınız. Giriş yapın."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        KidsEnrollment.objects.get_or_create(
+            kids_class=invite.kids_class, student=existing
+        )
+        if not invite.is_class_link:
+            invite.used_at = timezone.now()
+            invite.save(update_fields=["used_at"])
+        access = kids_encode_token(existing.id, token_type="access")
+        refresh = kids_encode_token(existing.id, token_type="refresh")
+        return Response(
+            {
+                "access": access,
+                "refresh": refresh,
+                "token_kind": "kids",
+                "user": _kids_user_payload(existing, request),
+                "enrolled_existing": True,
+            },
+            status=status.HTTP_200_OK,
+        )
+    student = KidsUser(
+        email=email_norm,
+        first_name=data["first_name"],
+        last_name=data["last_name"],
+        role=KidsUserRole.STUDENT,
+    )
+    student.set_password(data["password"])
+    student.save()
+    KidsEnrollment.objects.get_or_create(kids_class=invite.kids_class, student=student)
+    if not invite.is_class_link:
+        invite.used_at = timezone.now()
+        invite.save(update_fields=["used_at"])
+    access = kids_encode_token(student.id, token_type="access")
+    refresh = kids_encode_token(student.id, token_type="refresh")
+    return Response(
+        {
+            "access": access,
+            "refresh": refresh,
+            "token_kind": "kids",
+            "user": _kids_user_payload(student, request),
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+def _accept_invite_family(request, invite: KidsInvite, data: dict) -> Response:
+    if not invite or not invite.is_valid():
+        return Response(
+            {"detail": "Davet geçersiz veya süresi dolmuş."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    parent_email_norm = _invite_email_normalized(invite, data)
+    if not parent_email_norm:
+        return Response(
+            {"detail": "Veli e-postası gerekli."}
+            if invite.is_class_link
+            else {"detail": "Davet geçersiz."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    with transaction.atomic():
+        existing_main = MainUser.objects.select_for_update().filter(email__iexact=parent_email_norm).first()
+        if existing_main:
+            if not existing_main.check_password(data["parent_password"]):
+                return Response(
+                    {"detail": "Veli şifresi hatalı."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            r = (existing_main.kids_portal_role or "").strip()
+            if r == KidsPortalRole.TEACHER:
+                return Response(
+                    {
+                        "detail": "Bu e-posta Kids öğretmen hesabı. Veli kaydı için farklı bir e-posta kullanın."
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            existing_main.kids_portal_role = KidsPortalRole.PARENT
+            existing_main.first_name = data["parent_first_name"].strip()[:150]
+            existing_main.last_name = data["parent_last_name"].strip()[:150]
+            existing_main.save(
+                update_fields=["kids_portal_role", "first_name", "last_name", "updated_at"]
+            )
+            parent = existing_main
+        else:
+            try:
+                parent = provision_kids_parent_user(
+                    email=parent_email_norm,
+                    first_name=data["parent_first_name"].strip(),
+                    last_name=data["parent_last_name"].strip(),
+                    phone="",
+                    raw_password=data["parent_password"],
+                )
+            except ValueError as e:
+                return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        students = []
+        created_students = []
+        for child in (data.get("children") or []):
+            internal_email = f"{uuid.uuid4().hex}@student.kids.internal"
+            login_name = _generate_unique_student_login_name(
+                child["first_name"], child["last_name"]
+            )
+            student = KidsUser(
+                email=internal_email,
+                first_name=child["first_name"].strip(),
+                last_name=child["last_name"].strip(),
+                role=KidsUserRole.STUDENT,
+                parent_account=parent,
+                student_login_name=login_name,
+            )
+            student.set_password(child["password"])
+            student.save()
+            KidsEnrollment.objects.get_or_create(kids_class=invite.kids_class, student=student)
+            students.append(student)
+            created_students.append(
+                {
+                    "id": student.id,
+                    "first_name": student.first_name,
+                    "last_name": student.last_name,
+                    "student_login_name": login_name,
+                }
+            )
+
+    if not invite.is_class_link:
+        invite.used_at = timezone.now()
+        invite.save(update_fields=["used_at"])
+
+    primary_student = students[0]
+    ref = RefreshToken.for_user(parent)
+    access = str(ref.access_token)
+    refresh = str(ref)
+    return Response(
+        {
+            "access": access,
+            "refresh": refresh,
+            "token_kind": "main_site",
+            "user": _account_kids_payload(parent, request),
+            "student_login_name": primary_student.student_login_name,
+            "created_children": created_students,
+            "parent_email": parent_email_norm,
+            "flow": "family",
+        },
+        status=status.HTTP_201_CREATED,
+    )
 
 
 _MAX_PROFILE_PHOTO_BYTES = 2 * 1024 * 1024
@@ -208,21 +619,60 @@ class KidsLoginView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        email = (request.data.get("email") or "").strip()
+        raw = (request.data.get("login") or request.data.get("email") or "").strip()
         password = request.data.get("password") or ""
-        user = KidsUser.objects.filter(email__iexact=email).first()
-        if not user or not user.is_active or not user.check_password(password):
+        login_is_email = "@" in raw
+
+        student = None
+        if raw:
+            student = KidsUser.objects.filter(email__iexact=raw).first()
+            if not student and not login_is_email:
+                student = KidsUser.objects.filter(student_login_name__iexact=raw).first()
+
+        if student:
+            if student.is_active and student.check_password(password):
+                access, refresh, token_kind = _issue_login_tokens(student, password)
+                return Response(
+                    {
+                        "access": access,
+                        "refresh": refresh,
+                        "token_kind": token_kind,
+                        "user": _kids_user_payload(student, request),
+                    }
+                )
             return Response(
                 {"detail": "Geçersiz e-posta veya şifre."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        access = kids_encode_token(user.id, token_type="access")
-        refresh = kids_encode_token(user.id, token_type="refresh")
+
+        if not raw or not login_is_email:
+            return Response(
+                {"detail": "Geçersiz e-posta veya şifre."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        main = MainUser.objects.filter(email__iexact=raw, is_active=True).first()
+        if (
+            not main
+            or getattr(main, "is_deactivated", False)
+            or not main.check_password(password)
+        ):
+            return Response(
+                {"detail": "Geçersiz e-posta veya şifre."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not may_access_kids_with_main_jwt(main):
+            return Response(
+                {"detail": "Bu hesapla Kids bölümüne giriş yetkiniz yok."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        access, refresh, token_kind = _issue_login_tokens(main, password)
         return Response(
             {
                 "access": access,
                 "refresh": refresh,
-                "user": _kids_user_payload(user, request),
+                "token_kind": token_kind,
+                "user": _account_kids_payload(main, request),
             }
         )
 
@@ -234,25 +684,29 @@ class KidsTokenRefreshView(APIView):
     def post(self, request):
         raw = request.data.get("refresh") or ""
         payload = kids_decode_token(raw)
-        if not payload or payload.get("typ") != "refresh":
+        if payload and payload.get("typ") == "refresh":
+            try:
+                uid = int(payload["sub"])
+            except (KeyError, ValueError):
+                return Response(
+                    {"detail": "Geçersiz token."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            if not KidsUser.objects.filter(pk=uid, is_active=True).exists():
+                return Response(
+                    {"detail": "Kullanıcı bulunamadı."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            access = kids_encode_token(uid, token_type="access")
+            return Response({"access": access})
+
+        ser = TokenRefreshSerializer(data={"refresh": raw})
+        if not ser.is_valid():
             return Response(
                 {"detail": "Geçersiz veya süresi dolmuş yenileme jetonu."},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
-        try:
-            uid = int(payload["sub"])
-        except (KeyError, ValueError):
-            return Response(
-                {"detail": "Geçersiz token."},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-        if not KidsUser.objects.filter(pk=uid, is_active=True).exists():
-            return Response(
-                {"detail": "Kullanıcı bulunamadı."},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-        access = kids_encode_token(uid, token_type="access")
-        return Response({"access": access})
+        return Response(dict(ser.validated_data))
 
 
 _KIDS_PW_RESET_MSG = (
@@ -337,17 +791,190 @@ class KidsPasswordResetConfirmView(APIView):
         return Response({"detail": "Şifreniz güncellendi. Yeni şifrenizle giriş yapabilirsiniz."})
 
 
+class KidsParentSwitchStudentView(KidsAuthenticatedMixin, APIView):
+    """Veli oturumu: kendi doğrulanmış hesabıyla bağlı çocuğun JWT'sine geçiş (e-posta/kullanıcı adı gerekmez)."""
+
+    permission_classes = [IsAuthenticated, IsKidsParent]
+
+    def post(self, request):
+        raw = request.data.get("student_id")
+        try:
+            sid = int(raw)
+        except (TypeError, ValueError):
+            return Response(
+                {"detail": "Geçerli öğrenci seçilmedi."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        parent = request.user
+        student = KidsUser.objects.filter(
+            pk=sid,
+            role=KidsUserRole.STUDENT,
+            parent_account_id=parent.id,
+            is_active=True,
+        ).first()
+        if not student:
+            return Response(
+                {"detail": "Bu çocuk hesabına erişim yok veya bulunamadı."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        access = kids_encode_token(student.id, token_type="access")
+        refresh = kids_encode_token(student.id, token_type="refresh")
+        return Response(
+            {
+                "access": access,
+                "refresh": refresh,
+                "user": _kids_user_payload(student, request),
+            }
+        )
+
+
+class KidsParentChildrenOverviewView(KidsAuthenticatedMixin, APIView):
+    """Veli paneli: çocukların başarı ve proje özeti; `pending_parent_actions` ileride onay kuyruğu için."""
+
+    permission_classes = [IsAuthenticated, IsKidsParent]
+
+    def get(self, request):
+        children = request.user.kids_children_accounts.filter(
+            role=KidsUserRole.STUDENT, is_active=True
+        ).order_by("first_name", "last_name", "id")
+        return Response({"children": [_parent_child_overview_dict(s) for s in children]})
+
+
 class KidsMeView(KidsAuthenticatedMixin, APIView):
+    authentication_classes = [KidsOrMainSiteStaffJWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return Response(_kids_user_payload(request.user, request))
+        u = request.user
+        if isinstance(u, MainUser):
+            return Response(_account_kids_payload(u, request))
+        return Response(_kids_user_payload(u, request))
 
     def patch(self, request):
-        ser = KidsUserProfileUpdateSerializer(request.user, data=request.data, partial=True)
+        u = request.user
+        if isinstance(u, MainUser):
+            fn = (request.data.get("first_name") or "").strip()
+            ln = (request.data.get("last_name") or "").strip()
+            if fn:
+                u.first_name = fn[:150]
+            if ln:
+                u.last_name = ln[:150]
+            u.save(update_fields=["first_name", "last_name", "updated_at"])
+            return Response(_account_kids_payload(u, request))
+        ser = KidsUserProfileUpdateSerializer(u, data=request.data, partial=True)
         ser.is_valid(raise_exception=True)
         ser.save()
-        return Response(_kids_user_payload(request.user, request))
+        return Response(_kids_user_payload(u, request))
+
+
+class KidsAdminTeacherListCreateView(KidsAuthenticatedMixin, APIView):
+    """Admin paneli: öğretmen listele / öğretmen oluştur (rastgele şifre + e-posta)."""
+
+    authentication_classes = [KidsOrMainSiteStaffJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsKidsAdmin]
+
+    def get(self, request):
+        qs = (
+            MainUser.objects.filter(kids_portal_role=KidsPortalRole.TEACHER)
+            .only("id", "email", "first_name", "last_name", "is_active", "created_at")
+            .order_by("-created_at")
+        )
+        rows = [
+            {
+                "id": t.id,
+                "email": t.email,
+                "first_name": t.first_name,
+                "last_name": t.last_name,
+                "is_active": t.is_active,
+                "created_at": t.created_at,
+            }
+            for t in qs
+        ]
+        return Response({"teachers": rows})
+
+    def post(self, request):
+        email = (request.data.get("email") or "").strip().lower()
+        first_name = (request.data.get("first_name") or "").strip()
+        last_name = (request.data.get("last_name") or "").strip()
+        if not email:
+            return Response({"detail": "E-posta zorunlu."}, status=status.HTTP_400_BAD_REQUEST)
+        if KidsUser.objects.filter(email__iexact=email).exists():
+            return Response(
+                {"detail": "Bu e-posta bir öğrenci hesabında kullanılıyor; öğretmen için farklı e-posta seçin."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if MainUser.objects.filter(email__iexact=email).exists():
+            return Response(
+                {
+                    "detail": "Bu e-posta Marifetli ana sitede kayıtlı. Öğretmen eklemek için hesaba "
+                    "`kids_portal_role=teacher` atayın ve kullanıcıyı bilgilendirin veya farklı e-posta kullanın."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        temp_password = _random_temp_password()
+        with transaction.atomic():
+            teacher = MainUser.objects.create_user(
+                username=unique_username_from_email(email),
+                email=email,
+                password=temp_password,
+                first_name=first_name[:150],
+                last_name=last_name[:150],
+                kids_portal_role=KidsPortalRole.TEACHER,
+            )
+        sent_ok, err = _send_kids_teacher_welcome_email(
+            to_email=email,
+            first_name=teacher.first_name,
+            temp_password=temp_password,
+        )
+        return Response(
+            {
+                "teacher": {
+                    "id": teacher.id,
+                    "email": teacher.email,
+                    "first_name": teacher.first_name or "",
+                    "last_name": teacher.last_name or "",
+                    "is_active": teacher.is_active,
+                    "created_at": teacher.created_at,
+                },
+                "email_sent": sent_ok,
+                "email_error": err,
+                # SMTP kapalı kurulumlarda adminin kullanıcıya manuel iletebilmesi için fallback.
+                "temporary_password": None if sent_ok else temp_password,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class KidsAdminTeacherDetailPatchView(KidsAuthenticatedMixin, APIView):
+    """Admin: öğretmen hesabını etkin / pasif yap."""
+
+    authentication_classes = [KidsOrMainSiteStaffJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsKidsAdmin]
+
+    def patch(self, request, pk: int):
+        is_active = request.data.get("is_active")
+        if not isinstance(is_active, bool):
+            return Response(
+                {"detail": "is_active alanı boolean olmalıdır."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        teacher = MainUser.objects.filter(pk=pk, kids_portal_role=KidsPortalRole.TEACHER).first()
+        if not teacher:
+            return Response({"detail": "Öğretmen bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
+        teacher.is_active = is_active
+        teacher.save(update_fields=["is_active"])
+        return Response(
+            {
+                "teacher": {
+                    "id": teacher.id,
+                    "email": teacher.email,
+                    "first_name": teacher.first_name or "",
+                    "last_name": teacher.last_name or "",
+                    "is_active": teacher.is_active,
+                    "created_at": teacher.created_at,
+                }
+            }
+        )
 
 
 class KidsAppConfigView(KidsAuthenticatedMixin, APIView):
@@ -389,10 +1016,14 @@ class KidsProfilePhotoView(KidsAuthenticatedMixin, APIView):
                 {"detail": "Yalnızca JPEG, PNG veya WebP yükleyebilirsiniz."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        user = request.user
-        user.profile_picture = f
-        user.save(update_fields=["profile_picture", "updated_at"])
-        return Response(_kids_user_payload(user, request))
+        u = request.user
+        if isinstance(u, MainUser):
+            u.profile_picture = f
+            u.save(update_fields=["profile_picture", "updated_at"])
+            return Response(_account_kids_payload(u, request))
+        u.profile_picture = f
+        u.save(update_fields=["profile_picture", "updated_at"])
+        return Response(_kids_user_payload(u, request))
 
 
 class KidsStudentSubmissionImageUploadView(KidsAuthenticatedMixin, APIView):
@@ -401,7 +1032,7 @@ class KidsStudentSubmissionImageUploadView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        if request.user.role != KidsUserRole.STUDENT:
+        if not is_kids_student_user(request.user):
             return Response(status=status.HTTP_403_FORBIDDEN)
         f = request.FILES.get("image")
         if not f:
@@ -465,6 +1096,7 @@ class KidsInvitePreviewView(APIView):
                 "class_description": (kc.description or "")[:300],
                 "teacher_display": td,
                 "school_name": school.name if school else "",
+                "requires_parent_email": invite.is_class_link,
                 "requires_student_email": invite.is_class_link,
                 "expires_at": invite.expires_at.isoformat(),
             }
@@ -476,88 +1108,21 @@ class KidsAcceptInviteView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        ser = KidsAcceptInviteSerializer(data=request.data)
+        body = request.data
+        # Veli+çocuk ailesi her zaman parent_password içerir; eski tek-öğrenci akışı göndermez.
+        # Önceki kod ayrıca child_first_name şart koşuyordu; yalnızca `children` dizisi gelince
+        # yanlışlıkla legacy serializer seçiliyordu (kök first_name/last_name/password hatası).
+        is_family = bool(body.get("parent_password"))
+        if is_family:
+            ser = KidsAcceptInviteFamilySerializer(data=body)
+        else:
+            ser = KidsAcceptInviteLegacySerializer(data=body)
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
         invite = KidsInvite.objects.select_related("kids_class").filter(token=data["token"]).first()
-        if not invite or not invite.is_valid():
-            return Response(
-                {"detail": "Davet geçersiz veya süresi dolmuş."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if invite.is_class_link:
-            email_raw = (data.get("email") or "").strip()
-            if not email_raw:
-                return Response(
-                    {"detail": "Öğrenci e-postası gerekli."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            email_norm = email_raw.lower()
-        else:
-            email_norm = (invite.parent_email or "").strip().lower()
-            if not email_norm:
-                return Response(
-                    {"detail": "Davet geçersiz."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-        existing = KidsUser.objects.filter(email__iexact=email_norm).first()
-        if existing:
-            if existing.role != KidsUserRole.STUDENT:
-                return Response(
-                    {"detail": "Bu e-posta başka bir rol ile kayıtlı."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if not existing.check_password(data["password"]):
-                return Response(
-                    {"detail": "Şifre hatalı."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if KidsEnrollment.objects.filter(
-                kids_class=invite.kids_class, student=existing
-            ).exists():
-                return Response(
-                    {"detail": "Bu sınıfa zaten kayıtlısınız. Giriş yapın."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            KidsEnrollment.objects.get_or_create(
-                kids_class=invite.kids_class, student=existing
-            )
-            if not invite.is_class_link:
-                invite.used_at = timezone.now()
-                invite.save(update_fields=["used_at"])
-            access = kids_encode_token(existing.id, token_type="access")
-            refresh = kids_encode_token(existing.id, token_type="refresh")
-            return Response(
-                {
-                    "access": access,
-                    "refresh": refresh,
-                    "user": _kids_user_payload(existing, request),
-                    "enrolled_existing": True,
-                },
-                status=status.HTTP_200_OK,
-            )
-        student = KidsUser(
-            email=email_norm,
-            first_name=data["first_name"],
-            last_name=data["last_name"],
-            role=KidsUserRole.STUDENT,
-        )
-        student.set_password(data["password"])
-        student.save()
-        KidsEnrollment.objects.get_or_create(kids_class=invite.kids_class, student=student)
-        if not invite.is_class_link:
-            invite.used_at = timezone.now()
-            invite.save(update_fields=["used_at"])
-        access = kids_encode_token(student.id, token_type="access")
-        refresh = kids_encode_token(student.id, token_type="refresh")
-        return Response(
-            {
-                "access": access,
-                "refresh": refresh,
-                "user": _kids_user_payload(student, request),
-            },
-            status=status.HTTP_201_CREATED,
-        )
+        if is_family:
+            return _accept_invite_family(request, invite, data)
+        return _accept_invite_legacy(request, invite, data)
 
 
 class KidsClassInviteLinkCreateView(KidsAuthenticatedMixin, APIView):
@@ -1014,7 +1579,7 @@ class KidsStudentDashboardView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        if request.user.role != KidsUserRole.STUDENT:
+        if not is_kids_student_user(request.user):
             return Response(
                 {"detail": "Bu uç nokta yalnızca öğrenci hesapları içindir."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -1069,7 +1634,7 @@ class KidsSubmissionCreateView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        if request.user.role != KidsUserRole.STUDENT:
+        if not is_kids_student_user(request.user):
             return Response(status=status.HTTP_403_FORBIDDEN)
         ser = KidsSubmissionSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
@@ -1143,7 +1708,7 @@ class KidsStudentSubmissionForAssignmentView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        if request.user.role != KidsUserRole.STUDENT:
+        if not is_kids_student_user(request.user):
             return Response(
                 {"detail": "Bu uç nokta yalnızca öğrenci hesapları içindir."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -1300,7 +1865,7 @@ class KidsStudentRoadmapView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        if request.user.role != KidsUserRole.STUDENT:
+        if not is_kids_student_user(request.user):
             return Response(
                 {"detail": "Bu uç nokta yalnızca öğrenci hesapları içindir."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -1329,7 +1894,7 @@ class KidsFreestyleListCreateView(KidsAuthenticatedMixin, APIView):
         return Response(data)
 
     def post(self, request):
-        if request.user.role != KidsUserRole.STUDENT:
+        if not is_kids_student_user(request.user):
             return Response(status=status.HTTP_403_FORBIDDEN)
         ser = KidsFreestylePostSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
@@ -1347,9 +1912,23 @@ class KidsNotificationListView(KidsAuthenticatedMixin, generics.ListAPIView):
     serializer_class = KidsNotificationSerializer
 
     def get_queryset(self):
+        u = self.request.user
+        if is_kids_student_user(u):
+            q = Q(recipient_student=u)
+        elif is_main_user(u):
+            q = Q(recipient_user=u)
+        else:
+            q = Q(pk__in=[])
         return (
-            KidsNotification.objects.filter(recipient=self.request.user)
-            .select_related("assignment", "submission", "sender")
+            KidsNotification.objects.filter(q)
+            .select_related(
+                "assignment",
+                "submission",
+                "challenge",
+                "challenge_invite",
+                "sender_student",
+                "sender_user",
+            )
             .order_by("-created_at")
         )
 
@@ -1358,7 +1937,13 @@ class KidsNotificationMarkReadView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def patch(self, request, pk):
-        n = KidsNotification.objects.filter(pk=pk, recipient=request.user).first()
+        u = request.user
+        if is_kids_student_user(u):
+            n = KidsNotification.objects.filter(pk=pk, recipient_student=u).first()
+        elif is_main_user(u):
+            n = KidsNotification.objects.filter(pk=pk, recipient_user=u).first()
+        else:
+            n = None
         if not n:
             return Response(status=status.HTTP_404_NOT_FOUND)
         n.is_read = True
@@ -1370,7 +1955,14 @@ class KidsNotificationUnreadCountView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        c = KidsNotification.objects.filter(recipient=request.user, is_read=False).count()
+        u = request.user
+        if is_kids_student_user(u):
+            q = Q(recipient_student=u)
+        elif is_main_user(u):
+            q = Q(recipient_user=u)
+        else:
+            q = Q(pk__in=[])
+        c = KidsNotification.objects.filter(q, is_read=False).count()
         return Response({"unread_count": c})
 
 
@@ -1378,7 +1970,14 @@ class KidsNotificationMarkAllReadView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        KidsNotification.objects.filter(recipient=request.user, is_read=False).update(is_read=True)
+        u = request.user
+        if is_kids_student_user(u):
+            q = Q(recipient_student=u)
+        elif is_main_user(u):
+            q = Q(recipient_user=u)
+        else:
+            q = Q(pk__in=[])
+        KidsNotification.objects.filter(q, is_read=False).update(is_read=True)
         return Response({"message": "Tamam"})
 
 
@@ -1390,10 +1989,17 @@ class KidsFCMRegisterView(KidsAuthenticatedMixin, APIView):
         if not token:
             return Response({"error": "token gerekli"}, status=status.HTTP_400_BAD_REQUEST)
         device_name = (request.data.get("device_name") or "")[:100]
-        KidsFCMDeviceToken.objects.update_or_create(
-            token=token,
-            defaults={"kids_user": request.user, "device_name": device_name},
-        )
+        u = request.user
+        defaults = {"device_name": device_name}
+        if is_kids_student_user(u):
+            defaults["kids_user"] = u
+            defaults["user"] = None
+        elif is_main_user(u):
+            defaults["user"] = u
+            defaults["kids_user"] = None
+        else:
+            return Response({"error": "desteklenmeyen kullanıcı"}, status=status.HTTP_400_BAD_REQUEST)
+        KidsFCMDeviceToken.objects.update_or_create(token=token, defaults=defaults)
         return Response({"message": "Token kaydedildi"})
 
 

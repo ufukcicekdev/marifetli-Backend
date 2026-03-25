@@ -13,6 +13,7 @@ class EmailTemplate(models.Model):
         ('answer_notification', 'Answer Notification'),
         ('comment_notification', 'Comment Notification'),
         ('follow_notification', 'Follow Notification'),
+        ('kids_teacher_welcome', 'Marifetli Kids — Öğretmen hesabı (geçici şifre)'),
     ]
     
     name = models.CharField(max_length=100, unique=True)

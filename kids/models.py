@@ -1,18 +1,19 @@
 import uuid
 
+from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import models
 from django.utils import timezone
 
 
 class KidsUserRole(models.TextChoices):
-    ADMIN = "admin", "Admin"
-    TEACHER = "teacher", "Teacher"
-    STUDENT = "student", "Student"
+    """Bu tabloda yalnızca öğrenci satırları tutulur."""
+
+    STUDENT = "student", "Öğrenci"
 
 
 class KidsUser(models.Model):
-    """Ana site `users.User` tablosundan tamamen ayrı; sadece `kids_users` kullanılır."""
+    """Yalnızca çocuk (öğrenci) hesapları. Veli ve öğretmen `users.User` + `kids_portal_role`."""
 
     email = models.EmailField(unique=True, db_index=True)
     password = models.CharField(max_length=128)
@@ -28,6 +29,25 @@ class KidsUser(models.Model):
         choices=KidsUserRole.choices,
         default=KidsUserRole.STUDENT,
         db_index=True,
+    )
+    phone = models.CharField("telefon", max_length=32, blank=True, default="")
+    parent_account = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="kids_children_accounts",
+        verbose_name="veli hesabı",
+        help_text="Ana `users` tablosundaki veli; davet akışı ile bağlanır.",
+    )
+    student_login_name = models.CharField(
+        "öğrenci giriş adı",
+        max_length=40,
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Çocuk paneline e-posta yerine bu ad ile giriş (ör. ayse_yilmaz_a1b2).",
     )
     is_active = models.BooleanField(default=True)
     growth_points = models.PositiveIntegerField(
@@ -50,6 +70,10 @@ class KidsUser(models.Model):
     def set_password(self, raw_password: str) -> None:
         self.password = make_password(raw_password)
 
+    def set_unusable_password(self) -> None:
+        """AbstractBaseUser API uyumu; yalnızca ana site oturumuyla açılan admin kayıtları için."""
+        self.password = make_password(None)
+
     def check_password(self, raw_password: str) -> bool:
         return check_password(raw_password, self.password)
 
@@ -70,10 +94,9 @@ class KidsSchool(models.Model):
     """Öğretmenin tanımladığı okul; sınıflar buradan seçilir."""
 
     teacher = models.ForeignKey(
-        KidsUser,
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="kids_schools",
-        limit_choices_to={"role__in": [KidsUserRole.TEACHER, KidsUserRole.ADMIN]},
     )
     name = models.CharField("okul adı", max_length=200)
     province = models.CharField("il", max_length=100, blank=True)
@@ -106,10 +129,9 @@ class KidsClass(models.Model):
         related_name="kids_classes",
     )
     teacher = models.ForeignKey(
-        KidsUser,
+        settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="kids_classes_teaching",
-        limit_choices_to={"role__in": [KidsUserRole.TEACHER, KidsUserRole.ADMIN]},
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -159,9 +181,10 @@ class KidsInvite(models.Model):
     is_class_link = models.BooleanField("sınıf davet linki", default=False)
     token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     created_by = models.ForeignKey(
-        KidsUser,
+        settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
         null=True,
+        blank=True,
         related_name="kids_invites_sent",
     )
     expires_at = models.DateTimeField()
@@ -360,24 +383,216 @@ class KidsFreestylePost(models.Model):
         ordering = ["-created_at"]
 
 
+class KidsChallenge(models.Model):
+    """Öğrenci kaynaklı: sınıf arkadaşları (öğretmen onayı) veya serbest (veli onayı, sınıfsız)."""
+
+    class Source(models.TextChoices):
+        STUDENT = "student", "Öğrenci"
+        TEACHER = "teacher", "Öğretmen"
+
+    class PeerScope(models.TextChoices):
+        CLASS_PEER = "class_peer", "Sınıf arkadaşları"
+        FREE_PARENT = "free_parent", "Serbest (veli onayı)"
+
+    class Status(models.TextChoices):
+        PENDING_TEACHER = "pending_teacher", "Öğretmen onayı bekliyor"
+        PENDING_PARENT = "pending_parent", "Veli onayı bekliyor"
+        REJECTED = "rejected", "Reddedildi"
+        ACTIVE = "active", "Devam ediyor"
+        ENDED = "ended", "Sona erdi"
+
+    kids_class = models.ForeignKey(
+        KidsClass,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="challenges",
+    )
+    peer_scope = models.CharField(
+        max_length=20,
+        choices=PeerScope.choices,
+        default=PeerScope.CLASS_PEER,
+        db_index=True,
+        help_text="Öğrenci önerilerinde: sınıf içi davetli mi, veli onaylı serbest mi.",
+    )
+    source = models.CharField(
+        max_length=20,
+        choices=Source.choices,
+        default=Source.STUDENT,
+        db_index=True,
+    )
+    created_by_student = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="kids_challenges_started",
+        limit_choices_to={"role": KidsUserRole.STUDENT},
+    )
+    created_by_teacher = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="kids_challenges_created_by_teacher",
+    )
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    rules_or_goal = models.TextField("hedef / kurallar", blank=True)
+    submission_rounds = models.PositiveSmallIntegerField(
+        "aynı konu için yarışma adımı sayısı",
+        default=1,
+        help_text="Öğrenciler bu başlık altında 1–5 ayrı adım görür (Challenge 1, Challenge 2, …).",
+    )
+    status = models.CharField(
+        max_length=32,
+        choices=Status.choices,
+        default=Status.PENDING_TEACHER,
+        db_index=True,
+    )
+    teacher_rejection_note = models.TextField(blank=True)
+    parent_rejection_note = models.TextField("veli red notu", blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="kids_challenges_reviewed",
+    )
+    activated_at = models.DateTimeField(null=True, blank=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    starts_at = models.DateTimeField(
+        "başlangıç",
+        null=True,
+        blank=True,
+        help_text="Öğrenci önerisinde: yarışmanın başlama zamanı (davet/katılım bu saate kadar kapalı olabilir).",
+    )
+    ends_at = models.DateTimeField(
+        "bitiş",
+        null=True,
+        blank=True,
+        help_text="Öğrenci önerisinde: süre sonu; sonra davet, kabul ve katılımcı işlemleri kapanır.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_challenges"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.title} ({self.kids_class_id or 'serbest'})"
+
+
+class KidsChallengeMember(models.Model):
+    challenge = models.ForeignKey(
+        KidsChallenge,
+        on_delete=models.CASCADE,
+        related_name="members",
+    )
+    student = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        related_name="kids_challenge_memberships",
+        limit_choices_to={"role": KidsUserRole.STUDENT},
+    )
+    is_initiator = models.BooleanField(default=False)
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "kids_challenge_members"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["challenge", "student"],
+                name="kids_challenge_member_uniq",
+            ),
+        ]
+
+
+class KidsChallengeInvite(models.Model):
+    class InviteStatus(models.TextChoices):
+        PENDING = "pending", "Bekliyor"
+        ACCEPTED = "accepted", "Kabul"
+        DECLINED = "declined", "Red"
+        REVOKED = "revoked", "Geri çekildi"
+
+    challenge = models.ForeignKey(
+        KidsChallenge,
+        on_delete=models.CASCADE,
+        related_name="invites",
+    )
+    inviter = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        related_name="kids_challenge_invites_sent",
+        limit_choices_to={"role": KidsUserRole.STUDENT},
+    )
+    invitee = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        related_name="kids_challenge_invites_received",
+        limit_choices_to={"role": KidsUserRole.STUDENT},
+    )
+    personal_message = models.TextField(blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=InviteStatus.choices,
+        default=InviteStatus.PENDING,
+        db_index=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "kids_challenge_invites"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["challenge", "invitee"],
+                name="kids_challenge_invite_challenge_invitee_uniq",
+            ),
+        ]
+
+
 class KidsNotification(models.Model):
     """Kids kullanıcıları için uygulama içi + (opsiyonel) push bildirim kaydı."""
 
     class NotificationType(models.TextChoices):
         NEW_ASSIGNMENT = "kids_new_assignment", "Yeni proje"
         SUBMISSION_RECEIVED = "kids_submission_received", "Proje teslimi"
+        CHALLENGE_PENDING_TEACHER = "kids_challenge_pending_teacher", "Yarışma öğretmen onayında"
+        CHALLENGE_APPROVED = "kids_challenge_approved", "Yarışma onaylandı"
+        CHALLENGE_REJECTED = "kids_challenge_rejected", "Yarışma reddedildi"
+        CHALLENGE_INVITE = "kids_challenge_invite", "Yarışma daveti"
+        CHALLENGE_PENDING_PARENT = "kids_challenge_pending_parent", "Serbest yarışma veli onayında"
 
-    recipient = models.ForeignKey(
-        KidsUser,
-        on_delete=models.CASCADE,
-        related_name="kids_notifications",
-    )
-    sender = models.ForeignKey(
+    recipient_student = models.ForeignKey(
         KidsUser,
         on_delete=models.CASCADE,
         null=True,
         blank=True,
-        related_name="sent_kids_notifications",
+        related_name="kids_notifications_received",
+    )
+    recipient_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="kids_notifications_received_user",
+    )
+    sender_student = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="sent_kids_notifications_student",
+    )
+    sender_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="sent_kids_notifications_user",
     )
     notification_type = models.CharField(max_length=40, choices=NotificationType.choices)
     message = models.TextField()
@@ -395,6 +610,20 @@ class KidsNotification(models.Model):
         blank=True,
         related_name="kids_notifications",
     )
+    challenge = models.ForeignKey(
+        KidsChallenge,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="kids_notifications",
+    )
+    challenge_invite = models.ForeignKey(
+        KidsChallengeInvite,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="kids_notifications",
+    )
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -402,8 +631,10 @@ class KidsNotification(models.Model):
         db_table = "kids_notifications"
         ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=["recipient", "created_at"]),
-            models.Index(fields=["recipient", "is_read"]),
+            models.Index(fields=["recipient_student", "created_at"]),
+            models.Index(fields=["recipient_student", "is_read"]),
+            models.Index(fields=["recipient_user", "created_at"]),
+            models.Index(fields=["recipient_user", "is_read"]),
         ]
 
 
@@ -413,7 +644,16 @@ class KidsFCMDeviceToken(models.Model):
     kids_user = models.ForeignKey(
         KidsUser,
         on_delete=models.CASCADE,
+        null=True,
+        blank=True,
         related_name="kids_fcm_tokens",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="kids_fcm_tokens_user",
     )
     token = models.CharField(max_length=512, unique=True, db_index=True)
     device_name = models.CharField(max_length=100, blank=True)

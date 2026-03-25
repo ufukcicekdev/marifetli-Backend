@@ -3,6 +3,17 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 
 
+class KidsPortalRole(models.TextChoices):
+    """
+    Marifetli Kids API erişimi (SimpleJWT). Boş = yalnızca ana site; kayıt olan herkes varsayılan boş.
+    """
+
+    NONE = "", "Kids erişimi yok"
+    TEACHER = "teacher", "Kids öğretmen"
+    PARENT = "parent", "Kids veli"
+    KIDS_ADMIN = "kids_admin", "Kids yönetim"
+
+
 class User(AbstractUser):
     email = models.EmailField(unique=True)
     username = models.CharField(max_length=150, unique=True)
@@ -35,6 +46,15 @@ class User(AbstractUser):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    kids_portal_role = models.CharField(
+        "Kids portal rolü",
+        max_length=20,
+        choices=KidsPortalRole.choices,
+        default=KidsPortalRole.NONE,
+        blank=True,
+        db_index=True,
+        help_text="Boş: ana sitede kayıtlı, Kids API’ye giremez. Öğretmen/veli/yönetim buradan atanır.",
+    )
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username']

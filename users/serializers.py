@@ -10,6 +10,35 @@ class UserSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=False)
     current_level_title = serializers.SerializerMethodField()
     avatar_badges = serializers.SerializerMethodField()
+    # Yalnızca oturum sahibi kendi kaydında; başka kullanıcılar (yazar vb.) için false — sızma olmaz.
+    is_staff = serializers.SerializerMethodField()
+    is_superuser = serializers.SerializerMethodField()
+    kids_portal_role = serializers.SerializerMethodField()
+
+    def get_is_staff(self, obj):
+        request = self.context.get("request")
+        if not request or not getattr(request.user, "is_authenticated", False):
+            return False
+        if request.user.pk != obj.pk:
+            return False
+        return bool(getattr(obj, "is_staff", False))
+
+    def get_is_superuser(self, obj):
+        request = self.context.get("request")
+        if not request or not getattr(request.user, "is_authenticated", False):
+            return False
+        if request.user.pk != obj.pk:
+            return False
+        return bool(getattr(obj, "is_superuser", False))
+
+    def get_kids_portal_role(self, obj):
+        """Yalnızca oturum sahibi kendi kaydında (Kids JWT / ana site çift kullanım)."""
+        request = self.context.get("request")
+        if not request or not getattr(request.user, "is_authenticated", False):
+            return ""
+        if request.user.pk != obj.pk:
+            return ""
+        return (getattr(obj, "kids_portal_role", None) or "").strip()
 
     def get_current_level_title(self, obj):
         from reputation.leveling import display_level_title_for_user
@@ -69,6 +98,9 @@ class UserSerializer(serializers.ModelSerializer):
             'following_count',
             'date_of_birth',
             'is_verified',
+            'is_staff',
+            'is_superuser',
+            'kids_portal_role',
             'current_level_title',
             'avatar_badges',
             'password',
@@ -80,6 +112,9 @@ class UserSerializer(serializers.ModelSerializer):
             'followers_count',
             'following_count',
             'is_verified',
+            'is_staff',
+            'is_superuser',
+            'kids_portal_role',
             'current_level_title',
             'avatar_badges',
             'created_at',

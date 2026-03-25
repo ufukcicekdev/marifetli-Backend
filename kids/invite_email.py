@@ -37,8 +37,8 @@ def send_kids_parent_invite_email(
         "<p>Merhaba,</p>"
         "<p><strong>{}</strong>, <strong>{}</strong> sınıfı için Marifetli Kids üzerinden "
         "öğrenci kaydı daveti gönderdi.</p>"
-        "<p>Aşağıdaki bağlantıyı kullanarak çocuğunuzun hesabını oluşturabilirsiniz "
-        "(veya mevcut öğrenci hesabıyla bu sınıfa katılabilirsiniz):</p>"
+        "<p>Aşağıdaki bağlantıda önce <strong>veli e-postanız ve şifreniz</strong>, ardından çocuğun bilgileri "
+        "ve çocuk şifresi istenir. Çocuk paneline özel bir kullanıcı adı verilir.</p>"
         "<p>{}</p>"
         "<p>Bu davet yaklaşık <strong>{} gün</strong> geçerlidir.</p>"
         "<p>Marifetli Kids — çocuklar için güvenli proje alanı</p>",
@@ -50,7 +50,7 @@ def send_kids_parent_invite_email(
     text = (
         f"Merhaba,\n\n"
         f"{teacher_display}, {class_name} sınıfı için Marifetli Kids daveti gönderdi.\n\n"
-        f"Kayıt bağlantısı:\n{signup_url}\n\n"
+        f"Kayıt bağlantısı (veli + çocuk kaydı):\n{signup_url}\n\n"
         f"Davet yaklaşık {expires_days} gün geçerlidir.\n"
     )
 

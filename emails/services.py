@@ -3,8 +3,9 @@ import mimetypes
 import os
 import requests
 from django.conf import settings
-from django.template.loader import render_to_string
 from django.core.mail import EmailMultiAlternatives
+from django.template.loader import render_to_string
+from django.utils import timezone as django_timezone
 from .models import EmailTemplate, SentEmail
 import logging
 
@@ -111,16 +112,38 @@ class EmailService:
         )
         
         try:
-            # Using SMTP2GO API
-            api_key = getattr(settings, 'SMTP2GO_API_KEY', None)
-            
+            api_key = (getattr(settings, 'SMTP2GO_API_KEY', None) or '').strip()
+
             if not api_key:
-                logger.warning("SMTP2GO_API_KEY not configured. Email not sent.")
-                sent_email.status = 'failed'
-                sent_email.error_message = 'SMTP2GO_API_KEY not configured'
-                sent_email.save()
-                return sent_email
-            
+                # Yerel / SMTP-only kurulum: Django EMAIL_* ile gönder (SMTP2GO olmadan).
+                try:
+                    msg = EmailMultiAlternatives(
+                        subject=subject,
+                        body=text_content or '',
+                        from_email=from_email,
+                        to=[recipient],
+                    )
+                    if html_content:
+                        msg.attach_alternative(html_content, 'text/html')
+                    msg.send(fail_silently=False)
+                    sent_email.status = 'sent'
+                    sent_email.sent_at = django_timezone.now()
+                    sent_email.save()
+                    logger.info("Email sent via Django mail backend to %s", recipient)
+                    return sent_email
+                except Exception as django_exc:
+                    logger.warning(
+                        "SMTP2GO_API_KEY yok veya boş; Django e-postası da gönderilemedi: %s",
+                        django_exc,
+                    )
+                    sent_email.status = 'failed'
+                    sent_email.error_message = (
+                        'Sağlayıcı (SMTP2GO) anahtarı yok; Django e-postası da başarısız: '
+                        f'{django_exc}'
+                    )
+                    sent_email.save()
+                    return sent_email
+
             # SMTP2GO expects api_key in header or payload, not HTTP Basic auth
             headers = {
                 'Content-Type': 'application/json',
@@ -142,7 +165,7 @@ class EmailService:
             
             if response.status_code == 200:
                 sent_email.status = 'sent'
-                sent_email.sent_at = sent_email.created_at
+                sent_email.sent_at = django_timezone.now()
                 logger.info(f"Email sent successfully to {recipient}")
             else:
                 sent_email.status = 'failed'
@@ -195,7 +218,16 @@ class EmailService:
         # Metadata: only serializable values for JSONField (no model instances)
         metadata = {'template_type': template_type}
         if context:
-            safe = ('token', 'verification_url', 'reset_url', 'frontend_url', 'username')
+            safe = (
+                'token',
+                'verification_url',
+                'reset_url',
+                'frontend_url',
+                'username',
+                'login_url',
+                'reset_hint_url',
+                'teacher_email',
+            )
             for k in safe:
                 if k in context and context[k] is not None:
                     metadata[k] = str(context[k]) if not isinstance(context[k], (str, int, float, bool)) else context[k]
@@ -274,6 +306,66 @@ class EmailService:
             context=context
         )
     
+    @staticmethod
+    def send_kids_teacher_welcome_email(
+        *,
+        to_email: str,
+        first_name: str,
+        temp_password: str,
+        login_url: str,
+        reset_hint_url: str,
+    ):
+        """
+        Kids yönetiminden oluşturulan öğretmene geçici şifre e-postası.
+        `emails/kids_teacher_welcome_email.html` + DB şablonu `kids_teacher_welcome`; yoksa düz HTML fallback.
+        """
+        display_name = (first_name or "").strip() or "Öğretmen"
+        context = {
+            "display_name": display_name,
+            "teacher_email": to_email,
+            "temp_password": temp_password,
+            "login_url": login_url,
+            "reset_hint_url": reset_hint_url,
+        }
+        sent = EmailService.send_template_email(
+            recipient=to_email,
+            template_type="kids_teacher_welcome",
+            context=context,
+        )
+        if sent is not None:
+            return sent
+
+        logger.warning(
+            "Email template 'kids_teacher_welcome' bulunamadı; düz metin/HTML fallback kullanılıyor. "
+            "Şablon için: python manage.py populate_email_templates"
+        )
+        subject = "Marifetli Kids — Öğretmen hesabınız hazır"
+        html = (
+            f"<p>Merhaba {display_name},</p>"
+            "<p>Marifetli Kids öğretmen hesabınız oluşturuldu.</p>"
+            f"<p><strong>Giriş e-postası:</strong> {to_email}<br/>"
+            f"<strong>Geçici şifre:</strong> {temp_password}</p>"
+            f"<p>Giriş: <a href=\"{login_url}\">{login_url}</a></p>"
+            "<p>Güvenlik için ilk girişten sonra şifrenizi değiştirmenizi öneririz. "
+            f"Giriş ekranındaki <em>Şifremi unuttum</em> akışı: "
+            f"<a href=\"{reset_hint_url}\">{reset_hint_url}</a></p>"
+        )
+        text = (
+            f"Merhaba {display_name},\n\n"
+            "Marifetli Kids öğretmen hesabınız oluşturuldu.\n"
+            f"Giriş e-postası: {to_email}\n"
+            f"Geçici şifre: {temp_password}\n\n"
+            f"Giriş: {login_url}\n\n"
+            "İlk girişten sonra şifrenizi değiştirmeniz önerilir.\n"
+        )
+        return EmailService.send_email(
+            recipient=to_email,
+            subject=subject,
+            html_content=html,
+            text_content=text,
+            metadata={"kids_teacher_welcome": True, "template_fallback": True},
+        )
+
     @staticmethod
     def send_notification_email(user, subject, message, notification_type='general'):
         """Send general notification email"""

@@ -1,10 +1,16 @@
+from datetime import timedelta
+
 from django.utils import timezone
 
 from rest_framework import serializers
 
+from .auth_utils import is_kids_teacher_or_admin_user, is_main_user
 from .class_names import normalize_kids_class_name
 from .models import (
     KidsAssignment,
+    KidsChallenge,
+    KidsChallengeInvite,
+    KidsChallengeMember,
     KidsClass,
     KidsEnrollment,
     KidsFreestylePost,
@@ -96,6 +102,9 @@ def _absolute_media_url(request, relative_or_absolute: str) -> str:
 class KidsUserSerializer(serializers.ModelSerializer):
     profile_picture = serializers.SerializerMethodField()
     growth_stage = serializers.SerializerMethodField()
+    student_login_name = serializers.SerializerMethodField()
+    phone = serializers.SerializerMethodField()
+    linked_students = serializers.SerializerMethodField()
 
     class Meta:
         model = KidsUser
@@ -109,8 +118,16 @@ class KidsUserSerializer(serializers.ModelSerializer):
             "profile_picture",
             "growth_points",
             "growth_stage",
+            "student_login_name",
+            "phone",
+            "linked_students",
         )
         read_only_fields = fields
+
+    def _is_self(self, obj) -> bool:
+        req = self.context.get("request")
+        u = getattr(req, "user", None) if req else None
+        return bool(u and getattr(u, "is_authenticated", False) and u.pk == obj.pk)
 
     def get_growth_stage(self, obj):
         return kids_user_growth_stage(obj)
@@ -119,6 +136,20 @@ class KidsUserSerializer(serializers.ModelSerializer):
         if not obj.profile_picture:
             return None
         return _absolute_media_url(self.context.get("request"), obj.profile_picture.url)
+
+    def get_student_login_name(self, obj):
+        if not self._is_self(obj):
+            return None
+        return obj.student_login_name or None
+
+    def get_phone(self, obj):
+        if not self._is_self(obj):
+            return None
+        return (obj.phone or "").strip() or None
+
+    def get_linked_students(self, obj):
+        """Veli artık `users.User`; bağlı çocuklar `/auth/me` üzerinden döner."""
+        return None
 
 
 class KidsUserProfileUpdateSerializer(serializers.ModelSerializer):
@@ -165,7 +196,14 @@ class KidsClassSerializer(serializers.ModelSerializer):
         super().__init__(*args, **kwargs)
         request = self.context.get("request")
         user = getattr(request, "user", None) if request else None
-        if user is not None and getattr(user, "is_authenticated", False):
+        # Öğrenci oturumu `KidsUser`; `KidsSchool.teacher` ise ana site `User` FK.
+        # Öğrenci/veli için `filter(teacher=user)` ValueError üretir; okul seçimi yalnız öğretmen/yönetim içindir.
+        if (
+            user is not None
+            and getattr(user, "is_authenticated", False)
+            and is_main_user(user)
+            and is_kids_teacher_or_admin_user(user)
+        ):
             self.fields["school_id"].queryset = KidsSchool.objects.filter(teacher=user)
 
     def validate_name(self, value):
@@ -250,14 +288,59 @@ class KidsInviteSerializer(serializers.ModelSerializer):
         read_only_fields = ("token", "used_at", "created_at")
 
 
-class KidsAcceptInviteSerializer(serializers.Serializer):
-    """Davet kabulü. `is_class_link` davetlerde `email` (öğrenci hesabı) zorunludur."""
+class KidsAcceptInviteLegacySerializer(serializers.Serializer):
+    """Eski tek hesap akışı: davetle doğrudan öğrenci oluşturma (geriye dönük)."""
 
     token = serializers.UUIDField()
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
     password = serializers.CharField(min_length=8, write_only=True)
     email = serializers.EmailField(required=False, allow_blank=True)
+
+
+class KidsAcceptInviteFamilySerializer(serializers.Serializer):
+    """Veli + çocuk: `is_class_link` davetlerde veli e-postası `email` ile gelir."""
+
+    token = serializers.UUIDField()
+    parent_first_name = serializers.CharField(max_length=150)
+    parent_last_name = serializers.CharField(max_length=150)
+    parent_phone = serializers.CharField(max_length=32, allow_blank=True, required=False, default="")
+    parent_password = serializers.CharField(min_length=8, write_only=True)
+    child_first_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    child_last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    child_password = serializers.CharField(min_length=8, write_only=True, required=False, allow_blank=True)
+    children = serializers.ListField(child=serializers.DictField(), required=False, allow_empty=False)
+    email = serializers.EmailField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        children = attrs.get("children")
+        if children:
+            normalized = []
+            for idx, c in enumerate(children, start=1):
+                if not isinstance(c, dict):
+                    raise serializers.ValidationError({"children": f"{idx}. kayıt geçersiz."})
+                fn = str(c.get("first_name") or "").strip()
+                ln = str(c.get("last_name") or "").strip()
+                pw = str(c.get("password") or "")
+                if not fn or not ln:
+                    raise serializers.ValidationError({"children": f"{idx}. çocuk için ad ve soyad zorunlu."})
+                if len(pw) < 8:
+                    raise serializers.ValidationError({"children": f"{idx}. çocuk şifresi en az 8 karakter olmalı."})
+                normalized.append({"first_name": fn[:150], "last_name": ln[:150], "password": pw})
+            if len(normalized) > 10:
+                raise serializers.ValidationError({"children": "Bir seferde en fazla 10 çocuk eklenebilir."})
+            attrs["children"] = normalized
+            return attrs
+
+        fn = (attrs.get("child_first_name") or "").strip()
+        ln = (attrs.get("child_last_name") or "").strip()
+        pw = attrs.get("child_password") or ""
+        if not fn or not ln or len(pw) < 8:
+            raise serializers.ValidationError(
+                "Çocuk bilgisi gerekli. Tek çocuk için ad/soyad/şifre girin veya children dizisi gönderin."
+            )
+        attrs["children"] = [{"first_name": fn[:150], "last_name": ln[:150], "password": pw}]
+        return attrs
 
 
 class KidsClassInviteLinkSerializer(serializers.Serializer):
@@ -623,6 +706,8 @@ class KidsNotificationSerializer(serializers.ModelSerializer):
             "created_at",
             "assignment",
             "submission",
+            "challenge",
+            "challenge_invite",
             "action_path",
         )
         read_only_fields = fields
@@ -632,4 +717,177 @@ class KidsNotificationSerializer(serializers.ModelSerializer):
             obj.notification_type,
             assignment=obj.assignment,
             submission=obj.submission,
+            challenge=obj.challenge,
+            challenge_invite=obj.challenge_invite,
+        )
+
+
+class KidsChallengeMemberReadSerializer(serializers.ModelSerializer):
+    student = KidsUserSerializer(read_only=True)
+
+    class Meta:
+        model = KidsChallengeMember
+        fields = ("id", "student", "is_initiator", "joined_at")
+
+
+class KidsChallengeInviteOutgoingSerializer(serializers.ModelSerializer):
+    """Yarışma detayında: mevcut kullanıcının gönderdiği bekleyen davetler (geri çekme için id)."""
+
+    invitee = KidsUserSerializer(read_only=True)
+
+    class Meta:
+        model = KidsChallengeInvite
+        fields = ("id", "invitee", "created_at")
+
+
+class KidsChallengeReadSerializer(serializers.ModelSerializer):
+    kids_class_name = serializers.SerializerMethodField()
+    members = KidsChallengeMemberReadSerializer(many=True, read_only=True)
+    outgoing_pending_invites = serializers.SerializerMethodField()
+
+    class Meta:
+        model = KidsChallenge
+        fields = (
+            "id",
+            "kids_class",
+            "kids_class_name",
+            "peer_scope",
+            "source",
+            "status",
+            "title",
+            "description",
+            "rules_or_goal",
+            "submission_rounds",
+            "created_by_student",
+            "teacher_rejection_note",
+            "parent_rejection_note",
+            "reviewed_at",
+            "activated_at",
+            "ended_at",
+            "starts_at",
+            "ends_at",
+            "created_at",
+            "members",
+            "outgoing_pending_invites",
+        )
+
+    def get_kids_class_name(self, obj: KidsChallenge) -> str:
+        kc = getattr(obj, "kids_class", None)
+        return kc.name if kc else ""
+
+    def get_outgoing_pending_invites(self, obj):
+        request = self.context.get("request")
+        if not request or not getattr(request.user, "is_authenticated", False):
+            return []
+        uid = request.user.pk
+        if hasattr(obj, "_prefetched_objects_cache") and "invites" in obj._prefetched_objects_cache:
+            invites = [
+                i
+                for i in obj.invites.all()
+                if i.inviter_id == uid and i.status == KidsChallengeInvite.InviteStatus.PENDING
+            ]
+        else:
+            invites = list(
+                KidsChallengeInvite.objects.filter(
+                    challenge=obj,
+                    inviter_id=uid,
+                    status=KidsChallengeInvite.InviteStatus.PENDING,
+                ).select_related("invitee")
+            )
+        return KidsChallengeInviteOutgoingSerializer(invites, many=True, context=self.context).data
+
+
+class KidsStudentChallengeProposeSerializer(serializers.Serializer):
+    peer_scope = serializers.ChoiceField(
+        choices=KidsChallenge.PeerScope.choices,
+        default=KidsChallenge.PeerScope.CLASS_PEER,
+    )
+    kids_class_id = serializers.IntegerField(required=False, allow_null=True)
+    title = serializers.CharField(max_length=200)
+    description = serializers.CharField(required=False, allow_blank=True, default="")
+    rules_or_goal = serializers.CharField(required=False, allow_blank=True, default="")
+    submission_rounds = serializers.IntegerField(required=False, default=1, min_value=1, max_value=5)
+    starts_at = serializers.DateTimeField()
+    ends_at = serializers.DateTimeField()
+
+    def validate(self, attrs):
+        scope = attrs.get("peer_scope") or KidsChallenge.PeerScope.CLASS_PEER
+        if scope == KidsChallenge.PeerScope.FREE_PARENT:
+            attrs["kids_class_id"] = None
+        elif attrs.get("kids_class_id") is None:
+            raise serializers.ValidationError(
+                {"kids_class_id": "Sınıf yarışması için sınıf seçmelisin."}
+            )
+        starts = attrs["starts_at"]
+        ends = attrs["ends_at"]
+        if ends <= starts:
+            raise serializers.ValidationError(
+                {"ends_at": "Bitiş zamanı başlangıçtan sonra olmalıdır."}
+            )
+        now = timezone.now()
+        if ends <= now:
+            raise serializers.ValidationError(
+                {"ends_at": "Bitiş zamanı gelecekte olmalıdır."}
+            )
+        min_dur = timedelta(minutes=30)
+        if ends - starts < min_dur:
+            raise serializers.ValidationError(
+                {"ends_at": "Yarışma süresi en az 30 dakika olmalıdır."}
+            )
+        return attrs
+
+
+class KidsChallengeInviteCreateSerializer(serializers.Serializer):
+    invitee_user_id = serializers.IntegerField(required=False, allow_null=True)
+    invite_all_classmates = serializers.BooleanField(required=False, default=False)
+    personal_message = serializers.CharField(required=False, allow_blank=True, default="", max_length=500)
+
+    def validate(self, attrs):
+        if attrs.get("invite_all_classmates"):
+            return attrs
+        if attrs.get("invitee_user_id") is None:
+            raise serializers.ValidationError(
+                {
+                    "invitee_user_id": "Tek davet için arkadaş seçin veya invite_all_classmates ile tüm sınıfa davet gönderin."
+                }
+            )
+        return attrs
+
+
+class KidsChallengeInviteRespondSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=("accept", "decline"))
+
+
+class KidsTeacherChallengeReviewSerializer(serializers.Serializer):
+    decision = serializers.ChoiceField(choices=("approve", "reject"))
+    rejection_note = serializers.CharField(required=False, allow_blank=True, default="", max_length=600)
+
+
+class KidsParentFreeChallengeReviewSerializer(serializers.Serializer):
+    decision = serializers.ChoiceField(choices=("approve", "reject"))
+    rejection_note = serializers.CharField(required=False, allow_blank=True, default="", max_length=600)
+
+
+class KidsTeacherChallengeCreateSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=200)
+    description = serializers.CharField(required=False, allow_blank=True, default="")
+    rules_or_goal = serializers.CharField(required=False, allow_blank=True, default="")
+    submission_rounds = serializers.IntegerField(required=False, default=1, min_value=1, max_value=5)
+    student_ids = serializers.ListField(child=serializers.IntegerField(), required=False, default=list)
+
+
+class KidsChallengeInviteReadSerializer(serializers.ModelSerializer):
+    challenge = KidsChallengeReadSerializer(read_only=True)
+    inviter = KidsUserSerializer(read_only=True)
+
+    class Meta:
+        model = KidsChallengeInvite
+        fields = (
+            "id",
+            "challenge",
+            "inviter",
+            "personal_message",
+            "status",
+            "created_at",
+            "responded_at",
         )
