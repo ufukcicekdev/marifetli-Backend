@@ -24,6 +24,7 @@ from .badges import (
     apply_teacher_pick,
     build_student_roadmap,
     sync_growth_milestone_badges,
+    try_award_badge,
     try_award_first_submit_badge,
 )
 from .auth_utils import is_kids_student_user, is_main_user, may_access_kids_with_main_jwt
@@ -37,8 +38,12 @@ from .models import (
     KidsEnrollment,
     KidsFCMDeviceToken,
     KidsFreestylePost,
+    KidsGame,
+    KidsGameProgress,
+    KidsGameSession,
     KidsInvite,
     KidsNotification,
+    KidsParentGamePolicy,
     KidsSchool,
     KidsSubmission,
     KidsUser,
@@ -116,7 +121,13 @@ from .serializers import (
     KidsFreestylePostSerializer,
     KidsInviteCreateSerializer,
     KidsInviteSerializer,
+    KidsGameSerializer,
+    KidsGameSessionCompleteSerializer,
+    KidsGameSessionSerializer,
+    KidsGameSessionStartSerializer,
+    KidsGameProgressSerializer,
     KidsNotificationSerializer,
+    KidsParentGamePolicySerializer,
     KidsSchoolSerializer,
     KidsSubmissionHighlightSerializer,
     KidsSubmissionReviewSerializer,
@@ -552,6 +563,104 @@ def _growth_points_for_first_review(valid: bool, positive: bool | None) -> int:
     return 1
 
 
+def _student_grade_level(student: KidsUser) -> int:
+    """MVP: öğrencinin sınıf adına göre 1-2 seviyesi; bulunamazsa 1."""
+    cls = (
+        KidsClass.objects.filter(enrollments__student=student)
+        .only("name")
+        .order_by("-id")
+        .first()
+    )
+    if not cls or not cls.name:
+        return 1
+    m = re.match(r"^\s*(\d{1,2})", cls.name)
+    if not m:
+        return 1
+    try:
+        g = int(m.group(1))
+    except (TypeError, ValueError):
+        return 1
+    if g < 1:
+        return 1
+    if g > 2:
+        return 2
+    return g
+
+
+def _minutes_played_today(student: KidsUser) -> int:
+    now = timezone.localtime()
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+    rows = KidsGameSession.objects.filter(
+        student=student,
+        status=KidsGameSession.SessionStatus.COMPLETED,
+        started_at__gte=start,
+        started_at__lt=end,
+    ).values_list("duration_seconds", flat=True)
+    total_seconds = sum(int(v or 0) for v in rows)
+    return total_seconds // 60
+
+
+def _is_now_in_allowed_window(now_local, start_t, end_t) -> bool:
+    if not start_t or not end_t:
+        return True
+    cur = now_local.time()
+    # Aynı gün penceresi: 18:00-20:00, geceyi aşan: 22:00-07:00.
+    if start_t <= end_t:
+        return start_t <= cur <= end_t
+    return cur >= start_t or cur <= end_t
+
+
+def _game_policy_error(student: KidsUser, game: KidsGame) -> str | None:
+    pol = getattr(student, "game_policy", None)
+    if not pol:
+        return None
+    blocked = pol.blocked_game_ids or []
+    if game.id in blocked:
+        return "Bu oyun veli kontrolünde geçici olarak kapalı."
+    now_local = timezone.localtime()
+    if not _is_now_in_allowed_window(now_local, pol.allowed_start_time, pol.allowed_end_time):
+        return "Bu saatte oyun oynayamazsın. Veli saat aralığını kontrol et."
+    played_min = _minutes_played_today(student)
+    if played_min >= int(pol.daily_minutes_limit or 0):
+        return "Günlük oyun süresi doldu. Yarın tekrar deneyebilirsin."
+    return None
+
+
+def _apply_game_rewards(student: KidsUser, session: KidsGameSession) -> None:
+    if session.status != KidsGameSession.SessionStatus.COMPLETED:
+        return
+    progress = int(session.progress_percent or 0)
+    score = int(session.score or 0)
+    delta = 0
+    if progress >= 80:
+        delta += 2
+    elif progress >= 50:
+        delta += 1
+    if score >= 80:
+        delta += 1
+    if delta > 0:
+        KidsUser.objects.filter(pk=student.id).update(growth_points=F("growth_points") + delta)
+    # Oyun tabanlı rozetler (MVP).
+    completed_count = KidsGameSession.objects.filter(
+        student=student,
+        status=KidsGameSession.SessionStatus.COMPLETED,
+    ).count()
+    if completed_count >= 1:
+        try_award_badge(student.id, "game_first_complete", "İlk oyun tamamlandı")
+    if completed_count >= 5:
+        try_award_badge(student.id, "game_five_complete", "5 oyun tamamlandı")
+    sync_growth_milestone_badges(student.id)
+
+
+def _daily_quest_score_target(difficulty: str) -> int:
+    if difficulty == KidsGame.Difficulty.HARD:
+        return 90
+    if difficulty == KidsGame.Difficulty.MEDIUM:
+        return 70
+    return 50
+
+
 def _assignment_submission_window_error(assignment) -> str | None:
     """Tarih penceresi dışında teslim string hatası; None = devam. Eski projeler (tarih yok) serbest."""
     now = timezone.now()
@@ -838,6 +947,100 @@ class KidsParentChildrenOverviewView(KidsAuthenticatedMixin, APIView):
             role=KidsUserRole.STUDENT, is_active=True
         ).order_by("first_name", "last_name", "id")
         return Response({"children": [_parent_child_overview_dict(s) for s in children]})
+
+
+class KidsParentGamePolicyDetailView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsParent]
+
+    def get(self, request, student_id: int):
+        student = KidsUser.objects.filter(
+            pk=student_id,
+            parent_account=request.user,
+            role=KidsUserRole.STUDENT,
+            is_active=True,
+        ).first()
+        if not student:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        policy, _ = KidsParentGamePolicy.objects.get_or_create(student=student)
+        return Response(KidsParentGamePolicySerializer(policy).data)
+
+    def put(self, request, student_id: int):
+        student = KidsUser.objects.filter(
+            pk=student_id,
+            parent_account=request.user,
+            role=KidsUserRole.STUDENT,
+            is_active=True,
+        ).first()
+        if not student:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        policy, _ = KidsParentGamePolicy.objects.get_or_create(student=student)
+        ser = KidsParentGamePolicySerializer(policy, data=request.data, partial=True)
+        ser.is_valid(raise_exception=True)
+        ser.save()
+        return Response(KidsParentGamePolicySerializer(policy).data)
+
+
+class KidsParentGamesListView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsParent]
+
+    def get(self, request):
+        raw = request.query_params.get("student_id")
+        student = None
+        if raw and str(raw).isdigit():
+            student = KidsUser.objects.filter(
+                pk=int(raw),
+                parent_account=request.user,
+                role=KidsUserRole.STUDENT,
+                is_active=True,
+            ).first()
+        if student is None:
+            student = (
+                request.user.kids_children_accounts.filter(
+                    role=KidsUserRole.STUDENT,
+                    is_active=True,
+                )
+                .order_by("id")
+                .first()
+            )
+        if student is None:
+            return Response({"games": []})
+        grade = _student_grade_level(student)
+        qs = KidsGame.objects.filter(
+            is_active=True,
+            min_grade__lte=grade,
+            max_grade__gte=grade,
+        ).order_by("sort_order", "title", "id")
+        today = timezone.localdate()
+        progress_map = {
+            p.game_id: p
+            for p in KidsGameProgress.objects.filter(student=student, game_id__in=[g.id for g in qs])
+        }
+        items = []
+        for game in qs:
+            p = progress_map.get(game.id)
+            difficulty = p.current_difficulty if p else KidsGame.Difficulty.EASY
+            target = _daily_quest_score_target(difficulty)
+            items.append(
+                {
+                    **KidsGameSerializer(game).data,
+                    "progress": {
+                        "current_difficulty": difficulty,
+                        "streak_count": int(getattr(p, "streak_count", 0) or 0),
+                        "best_score": int(getattr(p, "best_score", 0) or 0),
+                        "daily_quest_completed_today": bool(
+                            p and p.daily_quest_completed_on == today
+                        ),
+                        "daily_quest_target_score": int(target),
+                    },
+                }
+            )
+        return Response(
+            {
+                "student_id": student.id,
+                "grade_level": grade,
+                "games": items,
+            }
+        )
 
 
 class KidsMeView(KidsAuthenticatedMixin, APIView):
@@ -1628,6 +1831,191 @@ class KidsStudentDashboardView(KidsAuthenticatedMixin, APIView):
                 ).data,
             }
         )
+
+
+class KidsStudentGameListView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not is_kids_student_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        grade = _student_grade_level(request.user)
+        qs = KidsGame.objects.filter(
+            is_active=True,
+            min_grade__lte=grade,
+            max_grade__gte=grade,
+        ).order_by("sort_order", "title", "id")
+        policy, _ = KidsParentGamePolicy.objects.get_or_create(student=request.user)
+        progress_qs = KidsGameProgress.objects.filter(
+            student=request.user, game_id__in=[g.id for g in qs]
+        )
+        progress_map = {p.game_id: p for p in progress_qs}
+        today = timezone.localdate()
+        progresses = []
+        quests = []
+        for game in qs:
+            p = progress_map.get(game.id)
+            if not p:
+                p = KidsGameProgress(
+                    student=request.user,
+                    game=game,
+                    current_difficulty=KidsGame.Difficulty.EASY,
+                    streak_count=0,
+                    best_score=0,
+                )
+            progresses.append(p)
+            target = _daily_quest_score_target(p.current_difficulty)
+            quests.append(
+                {
+                    "game_id": game.id,
+                    "difficulty": p.current_difficulty,
+                    "score_target": target,
+                    "completed_today": p.daily_quest_completed_on == today,
+                    "streak_count": int(p.streak_count or 0),
+                }
+            )
+        payload = {
+            "grade_level": grade,
+            "policy": KidsParentGamePolicySerializer(policy).data,
+            "today_minutes_played": _minutes_played_today(request.user),
+            "games": KidsGameSerializer(qs, many=True).data,
+            "progresses": KidsGameProgressSerializer(progresses, many=True).data,
+            "daily_quests": quests,
+        }
+        return Response(payload)
+
+
+class KidsStudentGameSessionStartView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, game_id: int):
+        if not is_kids_student_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        game = KidsGame.objects.filter(pk=game_id, is_active=True).first()
+        if not game:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        ser = KidsGameSessionStartSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        grade = int(ser.validated_data.get("grade_level") or _student_grade_level(request.user))
+        difficulty = ser.validated_data.get("difficulty") or KidsGame.Difficulty.EASY
+        if grade < game.min_grade or grade > game.max_grade:
+            return Response(
+                {"detail": "Bu seviye bu oyun için uygun değil."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        pol_err = _game_policy_error(request.user, game)
+        if pol_err:
+            return Response({"detail": pol_err}, status=status.HTTP_403_FORBIDDEN)
+        active = KidsGameSession.objects.filter(
+            student=request.user,
+            status=KidsGameSession.SessionStatus.ACTIVE,
+        ).first()
+        if active:
+            active.status = KidsGameSession.SessionStatus.ABORTED
+            active.ended_at = timezone.now()
+            active.duration_seconds = max(
+                0, int((active.ended_at - active.started_at).total_seconds())
+            )
+            active.save(update_fields=["status", "ended_at", "duration_seconds", "updated_at"])
+        session = KidsGameSession.objects.create(
+            student=request.user,
+            game=game,
+            grade_level=grade,
+            difficulty=difficulty,
+        )
+        prog, _ = KidsGameProgress.objects.get_or_create(
+            student=request.user,
+            game=game,
+            defaults={"current_difficulty": difficulty},
+        )
+        if prog.current_difficulty != difficulty:
+            prog.current_difficulty = difficulty
+            prog.save(update_fields=["current_difficulty", "updated_at"])
+        return Response(KidsGameSessionSerializer(session).data, status=status.HTTP_201_CREATED)
+
+
+class KidsStudentGameSessionCompleteView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, session_id: int):
+        if not is_kids_student_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        session = KidsGameSession.objects.filter(
+            pk=session_id,
+            student=request.user,
+        ).select_related("game").first()
+        if not session:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        if session.status != KidsGameSession.SessionStatus.ACTIVE:
+            return Response(
+                {"detail": "Bu oyun oturumu zaten kapatılmış."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        ser = KidsGameSessionCompleteSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        now = timezone.now()
+        session.ended_at = now
+        session.duration_seconds = max(0, int((now - session.started_at).total_seconds()))
+        session.score = int(ser.validated_data.get("score") or 0)
+        session.progress_percent = int(ser.validated_data.get("progress_percent") or 0)
+        session.status = ser.validated_data.get("status")
+        session.save(
+            update_fields=[
+                "ended_at",
+                "duration_seconds",
+                "score",
+                "progress_percent",
+                "status",
+                "updated_at",
+            ]
+        )
+        _apply_game_rewards(request.user, session)
+        progress, _ = KidsGameProgress.objects.get_or_create(
+            student=request.user,
+            game=session.game,
+            defaults={"current_difficulty": session.difficulty},
+        )
+        today = timezone.localdate()
+        yesterday = today - timedelta(days=1)
+        if progress.last_played_on == today:
+            pass
+        elif progress.last_played_on == yesterday:
+            progress.streak_count = int(progress.streak_count or 0) + 1
+        else:
+            progress.streak_count = 1
+        progress.last_played_on = today
+        progress.best_score = max(int(progress.best_score or 0), int(session.score or 0))
+        target = _daily_quest_score_target(progress.current_difficulty)
+        if (
+            session.status == KidsGameSession.SessionStatus.COMPLETED
+            and int(session.progress_percent or 0) >= 70
+            and int(session.score or 0) >= target
+        ):
+            progress.daily_quest_completed_on = today
+        progress.save(
+            update_fields=[
+                "streak_count",
+                "last_played_on",
+                "best_score",
+                "daily_quest_completed_on",
+                "updated_at",
+            ]
+        )
+        return Response(KidsGameSessionSerializer(session).data)
+
+
+class KidsStudentGameSessionListView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not is_kids_student_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        qs = (
+            KidsGameSession.objects.filter(student=request.user)
+            .select_related("game")
+            .order_by("-created_at")[:40]
+        )
+        return Response({"sessions": KidsGameSessionSerializer(qs, many=True).data})
 
 
 class KidsSubmissionCreateView(KidsAuthenticatedMixin, APIView):

@@ -554,6 +554,146 @@ class KidsChallengeInvite(models.Model):
         ]
 
 
+class KidsGame(models.Model):
+    """Kids oyun kataloğu (MVP: iç oyunlar)."""
+
+    class Difficulty(models.TextChoices):
+        EASY = "easy", "Kolay"
+        MEDIUM = "medium", "Orta"
+        HARD = "hard", "Zor"
+
+    title = models.CharField(max_length=160)
+    slug = models.SlugField(max_length=180, unique=True)
+    description = models.TextField(blank=True)
+    instructions = models.TextField(blank=True)
+    min_grade = models.PositiveSmallIntegerField(default=1)
+    max_grade = models.PositiveSmallIntegerField(default=2)
+    difficulty = models.CharField(
+        max_length=16,
+        choices=Difficulty.choices,
+        default=Difficulty.EASY,
+    )
+    is_active = models.BooleanField(default=True, db_index=True)
+    sort_order = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_games"
+        ordering = ["sort_order", "title", "id"]
+
+    def __str__(self):
+        return self.title
+
+
+class KidsParentGamePolicy(models.Model):
+    """Veli: çocuk için oyun süresi ve saat aralığı kuralları."""
+
+    student = models.OneToOneField(
+        KidsUser,
+        on_delete=models.CASCADE,
+        related_name="game_policy",
+        limit_choices_to={"role": KidsUserRole.STUDENT},
+    )
+    daily_minutes_limit = models.PositiveSmallIntegerField(default=30)
+    allowed_start_time = models.TimeField(null=True, blank=True)
+    allowed_end_time = models.TimeField(null=True, blank=True)
+    blocked_game_ids = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_parent_game_policies"
+
+    def __str__(self):
+        return f"policy:{self.student_id}"
+
+
+class KidsGameSession(models.Model):
+    """Öğrencinin bir oyundaki oynama oturumu."""
+
+    class SessionStatus(models.TextChoices):
+        ACTIVE = "active", "Aktif"
+        COMPLETED = "completed", "Tamamlandı"
+        ABORTED = "aborted", "Yarıda bitti"
+
+    student = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        related_name="game_sessions",
+        limit_choices_to={"role": KidsUserRole.STUDENT},
+    )
+    game = models.ForeignKey(
+        KidsGame,
+        on_delete=models.CASCADE,
+        related_name="sessions",
+    )
+    grade_level = models.PositiveSmallIntegerField(default=1)
+    difficulty = models.CharField(
+        max_length=16,
+        choices=KidsGame.Difficulty.choices,
+        default=KidsGame.Difficulty.EASY,
+    )
+    started_at = models.DateTimeField(auto_now_add=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    duration_seconds = models.PositiveIntegerField(default=0)
+    score = models.PositiveIntegerField(default=0)
+    progress_percent = models.PositiveSmallIntegerField(default=0)
+    status = models.CharField(
+        max_length=20,
+        choices=SessionStatus.choices,
+        default=SessionStatus.ACTIVE,
+        db_index=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_game_sessions"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["student", "created_at"]),
+            models.Index(fields=["student", "status"]),
+            models.Index(fields=["game", "created_at"]),
+        ]
+
+
+class KidsGameProgress(models.Model):
+    """Oyun bazlı öğrenci ilerlemesi: zorluk, streak, günlük görev durumu."""
+
+    student = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        related_name="game_progresses",
+        limit_choices_to={"role": KidsUserRole.STUDENT},
+    )
+    game = models.ForeignKey(
+        KidsGame,
+        on_delete=models.CASCADE,
+        related_name="progresses",
+    )
+    current_difficulty = models.CharField(
+        max_length=16,
+        choices=KidsGame.Difficulty.choices,
+        default=KidsGame.Difficulty.EASY,
+    )
+    streak_count = models.PositiveSmallIntegerField(default=0)
+    last_played_on = models.DateField(null=True, blank=True)
+    daily_quest_completed_on = models.DateField(null=True, blank=True)
+    best_score = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_game_progresses"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "game"],
+                name="kids_game_progress_student_game_uniq",
+            ),
+        ]
+
+
 class KidsNotification(models.Model):
     """Kids kullanıcıları için uygulama içi + (opsiyonel) push bildirim kaydı."""
 

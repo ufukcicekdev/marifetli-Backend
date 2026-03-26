@@ -14,8 +14,12 @@ from .models import (
     KidsClass,
     KidsEnrollment,
     KidsFreestylePost,
+    KidsGame,
+    KidsGameProgress,
+    KidsGameSession,
     KidsInvite,
     KidsNotification,
+    KidsParentGamePolicy,
     KidsSchool,
     KidsSubmission,
     KidsUser,
@@ -866,6 +870,122 @@ class KidsTeacherChallengeReviewSerializer(serializers.Serializer):
 class KidsParentFreeChallengeReviewSerializer(serializers.Serializer):
     decision = serializers.ChoiceField(choices=("approve", "reject"))
     rejection_note = serializers.CharField(required=False, allow_blank=True, default="", max_length=600)
+
+
+class KidsGameSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = KidsGame
+        fields = (
+            "id",
+            "title",
+            "slug",
+            "description",
+            "instructions",
+            "min_grade",
+            "max_grade",
+            "difficulty",
+            "is_active",
+            "sort_order",
+        )
+        read_only_fields = fields
+
+
+class KidsParentGamePolicySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = KidsParentGamePolicy
+        fields = (
+            "student",
+            "daily_minutes_limit",
+            "allowed_start_time",
+            "allowed_end_time",
+            "blocked_game_ids",
+            "updated_at",
+        )
+        read_only_fields = ("student", "updated_at")
+
+    def validate_daily_minutes_limit(self, value):
+        if value < 5 or value > 240:
+            raise serializers.ValidationError("Günlük limit 5 ile 240 dakika arasında olmalıdır.")
+        return value
+
+    def validate(self, attrs):
+        st = attrs.get("allowed_start_time")
+        et = attrs.get("allowed_end_time")
+        if st and et and st == et:
+            raise serializers.ValidationError(
+                {"allowed_end_time": "Başlangıç ve bitiş saati aynı olamaz."}
+            )
+        blocked = attrs.get("blocked_game_ids")
+        if blocked is not None:
+            if not isinstance(blocked, list):
+                raise serializers.ValidationError({"blocked_game_ids": "Liste formatında olmalı."})
+            clean: list[int] = []
+            for raw in blocked:
+                try:
+                    gid = int(raw)
+                except (TypeError, ValueError):
+                    continue
+                if gid > 0 and gid not in clean:
+                    clean.append(gid)
+            attrs["blocked_game_ids"] = clean[:500]
+        return attrs
+
+
+class KidsGameSessionStartSerializer(serializers.Serializer):
+    grade_level = serializers.IntegerField(min_value=1, max_value=2, required=False, default=1)
+    difficulty = serializers.ChoiceField(
+        choices=KidsGame.Difficulty.choices,
+        required=False,
+        default=KidsGame.Difficulty.EASY,
+    )
+
+
+class KidsGameSessionCompleteSerializer(serializers.Serializer):
+    score = serializers.IntegerField(required=False, min_value=0, default=0)
+    progress_percent = serializers.IntegerField(required=False, min_value=0, max_value=100, default=100)
+    status = serializers.ChoiceField(
+        required=False,
+        default=KidsGameSession.SessionStatus.COMPLETED,
+        choices=(
+            KidsGameSession.SessionStatus.COMPLETED,
+            KidsGameSession.SessionStatus.ABORTED,
+        ),
+    )
+
+
+class KidsGameSessionSerializer(serializers.ModelSerializer):
+    game = KidsGameSerializer(read_only=True)
+
+    class Meta:
+        model = KidsGameSession
+        fields = (
+            "id",
+            "game",
+            "grade_level",
+            "difficulty",
+            "started_at",
+            "ended_at",
+            "duration_seconds",
+            "score",
+            "progress_percent",
+            "status",
+            "created_at",
+        )
+        read_only_fields = fields
+
+
+class KidsGameProgressSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = KidsGameProgress
+        fields = (
+            "game",
+            "current_difficulty",
+            "streak_count",
+            "last_played_on",
+            "daily_quest_completed_on",
+            "best_score",
+        )
+        read_only_fields = fields
 
 
 class KidsTeacherChallengeCreateSerializer(serializers.Serializer):

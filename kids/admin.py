@@ -10,8 +10,12 @@ from .models import (
     KidsEnrollment,
     KidsFCMDeviceToken,
     KidsFreestylePost,
+    KidsGame,
+    KidsGameProgress,
+    KidsGameSession,
     KidsInvite,
     KidsNotification,
+    KidsParentGamePolicy,
     KidsSchool,
     KidsSubmission,
     KidsUser,
@@ -158,6 +162,42 @@ class KidsUserBadgeAdmin(admin.ModelAdmin):
 @admin.register(KidsFreestylePost)
 class KidsFreestylePostAdmin(admin.ModelAdmin):
     list_display = ("title", "student", "is_visible", "created_at")
+
+
+@admin.register(KidsGame)
+class KidsGameAdmin(admin.ModelAdmin):
+    list_display = ("title", "slug", "min_grade", "max_grade", "difficulty", "is_active", "sort_order")
+    list_filter = ("is_active", "difficulty", "min_grade", "max_grade")
+    search_fields = ("title", "slug", "description")
+
+
+@admin.register(KidsParentGamePolicy)
+class KidsParentGamePolicyAdmin(admin.ModelAdmin):
+    list_display = ("student", "daily_minutes_limit", "allowed_start_time", "allowed_end_time", "updated_at")
+    search_fields = ("student__first_name", "student__last_name", "student__student_login_name")
+    raw_id_fields = ("student",)
+
+
+@admin.register(KidsGameSession)
+class KidsGameSessionAdmin(admin.ModelAdmin):
+    list_display = ("student", "game", "grade_level", "status", "score", "duration_seconds", "created_at")
+    list_filter = ("status", "grade_level", "game")
+    raw_id_fields = ("student", "game")
+
+
+@admin.register(KidsGameProgress)
+class KidsGameProgressAdmin(admin.ModelAdmin):
+    list_display = (
+        "student",
+        "game",
+        "current_difficulty",
+        "streak_count",
+        "daily_quest_completed_on",
+        "best_score",
+        "updated_at",
+    )
+    list_filter = ("current_difficulty",)
+    raw_id_fields = ("student", "game")
 
 
 @admin.register(KidsChallenge)

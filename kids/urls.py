@@ -11,6 +11,11 @@ urlpatterns = [
     path("auth/parent/switch-student/", views.KidsParentSwitchStudentView.as_view()),
     path("parent/children-overview/", views.KidsParentChildrenOverviewView.as_view()),
     path(
+        "parent/game-policies/<int:student_id>/",
+        views.KidsParentGamePolicyDetailView.as_view(),
+    ),
+    path("parent/games/", views.KidsParentGamesListView.as_view()),
+    path(
         "parent/free-challenges/",
         challenge_views.KidsParentFreeChallengesOverviewView.as_view(),
     ),
@@ -62,6 +67,16 @@ urlpatterns = [
     path("classes/<int:class_id>/weekly-champion/", views.KidsWeeklyChampionView.as_view()),
     path("invites/", views.KidsInviteCreateView.as_view()),
     path("student/dashboard/", views.KidsStudentDashboardView.as_view()),
+    path("student/games/", views.KidsStudentGameListView.as_view()),
+    path(
+        "student/games/<int:game_id>/sessions/start/",
+        views.KidsStudentGameSessionStartView.as_view(),
+    ),
+    path(
+        "student/game-sessions/<int:session_id>/complete/",
+        views.KidsStudentGameSessionCompleteView.as_view(),
+    ),
+    path("student/game-sessions/me/", views.KidsStudentGameSessionListView.as_view()),
     path("student/submissions/", views.KidsSubmissionCreateView.as_view()),
     path(
         "student/submissions/for-assignment/",
