@@ -409,14 +409,13 @@ class UserFollowersListView(generics.ListAPIView):
 @permission_classes([AllowAny])
 def request_password_reset(request):
     """Request password reset - sends email with reset token"""
-    email = request.data.get('email')
+    email = (request.data.get('email') or '').strip()
     
     if not email:
         return Response({'error': 'Email is required'}, status=status.HTTP_400_BAD_REQUEST)
     
-    try:
-        user = User.objects.get(email=email)
-    except User.DoesNotExist:
+    user = User.objects.filter(email__iexact=email).first()
+    if not user:
         return Response({
             'error': 'Bu e-posta adresi sistemimizde kayıtlı değil. Lütfen kayıtlı e-posta adresinizi girin veya yeni hesap oluşturun.',
         }, status=status.HTTP_404_NOT_FOUND)
@@ -428,7 +427,17 @@ def request_password_reset(request):
     user.save()
 
     try:
-        EmailService.send_password_reset_email(user, token)
+        sent = EmailService.send_password_reset_email(user, token)
+        if sent is None or getattr(sent, 'status', None) == 'failed':
+            logger.error(
+                "Şifre sıfırlama e-postası gönderilemedi (provider): email=%s error=%s",
+                email,
+                getattr(sent, 'error_message', None),
+            )
+            return Response(
+                {'error': 'E-posta gönderilemedi. Lütfen daha sonra tekrar deneyin.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
     except Exception as e:
         logger.error("Şifre sıfırlama e-postası gönderilemedi: %s", e)
         return Response({'error': 'E-posta gönderilemedi. Lütfen daha sonra tekrar deneyin.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
