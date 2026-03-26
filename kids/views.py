@@ -27,7 +27,12 @@ from .badges import (
     try_award_badge,
     try_award_first_submit_badge,
 )
-from .auth_utils import is_kids_student_user, is_main_user, may_access_kids_with_main_jwt
+from .auth_utils import (
+    is_kids_admin_user,
+    is_kids_student_user,
+    is_main_user,
+    may_access_kids_with_main_jwt,
+)
 from .authentication import KidsJWTAuthentication, KidsOrMainSiteStaffJWTAuthentication
 from .jwt_utils import kids_decode_token, kids_encode_token
 from .main_site_bridge import provision_kids_parent_user, unique_username_from_email
@@ -45,6 +50,8 @@ from .models import (
     KidsNotification,
     KidsParentGamePolicy,
     KidsSchool,
+    KidsSchoolTeacher,
+    KidsSchoolYearProfile,
     KidsSubmission,
     KidsUser,
     KidsUserBadge,
@@ -53,6 +60,47 @@ from .models import (
 )
 from .notifications_service import notify_students_new_assignment, notify_teacher_submission_received
 from .permissions import IsKidsAdmin, IsKidsParent, IsKidsTeacherOrAdmin
+from .meb_directory import split_line_full_location
+from .school_access import enrolled_distinct_student_count_for_school_year, schools_queryset_for_main_user
+from .turkey_il_plaka import (
+    il_name_to_plaka_int,
+    il_plaka_db_variants,
+    province_name_from_il_plaka_raw,
+)
+from users.models import KidsPortalRole
+from users.models import User as MainUser
+from users.utils import generate_verification_token
+
+from .serializers import (
+    _absolute_media_url,
+    KidsAcceptInviteFamilySerializer,
+    KidsAcceptInviteLegacySerializer,
+    KidsClassInviteLinkSerializer,
+    KidsAssignmentSerializer,
+    KidsAdminAssignSchoolTeacherSerializer,
+    KidsAdminSchoolCreateSerializer,
+    KidsClassSerializer,
+    KidsEnrollmentSerializer,
+    KidsFreestylePostSerializer,
+    KidsInviteCreateSerializer,
+    KidsInviteSerializer,
+    KidsGameSerializer,
+    KidsGameSessionCompleteSerializer,
+    KidsGameSessionSerializer,
+    KidsGameSessionStartSerializer,
+    KidsGameProgressSerializer,
+    KidsNotificationSerializer,
+    KidsParentGamePolicySerializer,
+    KidsSchoolSerializer,
+    KidsSchoolYearProfileWriteSerializer,
+    KidsSubmissionHighlightSerializer,
+    KidsSubmissionReviewSerializer,
+    KidsSubmissionSerializer,
+    KidsTeacherSubmissionSerializer,
+    KidsUserProfileUpdateSerializer,
+    KidsUserSerializer,
+    kids_user_growth_stage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,43 +148,6 @@ def _send_kids_teacher_welcome_email(
     if sent and getattr(sent, "status", None) == "sent":
         return True, None
     return False, getattr(sent, "error_message", None) or "E-posta gönderilemedi"
-from .meb_directory import split_line_full_location
-from .turkey_il_plaka import (
-    il_name_to_plaka_int,
-    il_plaka_db_variants,
-    province_name_from_il_plaka_raw,
-)
-from users.models import KidsPortalRole
-from users.models import User as MainUser
-from users.utils import generate_verification_token
-
-from .serializers import (
-    _absolute_media_url,
-    KidsAcceptInviteFamilySerializer,
-    KidsAcceptInviteLegacySerializer,
-    KidsClassInviteLinkSerializer,
-    KidsAssignmentSerializer,
-    KidsClassSerializer,
-    KidsEnrollmentSerializer,
-    KidsFreestylePostSerializer,
-    KidsInviteCreateSerializer,
-    KidsInviteSerializer,
-    KidsGameSerializer,
-    KidsGameSessionCompleteSerializer,
-    KidsGameSessionSerializer,
-    KidsGameSessionStartSerializer,
-    KidsGameProgressSerializer,
-    KidsNotificationSerializer,
-    KidsParentGamePolicySerializer,
-    KidsSchoolSerializer,
-    KidsSubmissionHighlightSerializer,
-    KidsSubmissionReviewSerializer,
-    KidsSubmissionSerializer,
-    KidsTeacherSubmissionSerializer,
-    KidsUserProfileUpdateSerializer,
-    KidsUserSerializer,
-    kids_user_growth_stage,
-)
 
 
 def _kids_user_payload(user: KidsUser, request) -> dict:
@@ -331,6 +342,43 @@ def _invite_email_normalized(invite: KidsInvite, data: dict) -> str | None:
     return (invite.parent_email or "").strip().lower() or None
 
 
+def _school_distinct_enrolled_student_count(school_id: int) -> int:
+    return (
+        KidsEnrollment.objects.filter(kids_class__school_id=school_id)
+        .values("student_id")
+        .distinct()
+        .count()
+    )
+
+
+def _school_demo_window_active(school: KidsSchool) -> bool:
+    if school.lifecycle_stage != KidsSchool.LifecycleStage.DEMO:
+        return True
+    if not school.demo_start_at or not school.demo_end_at:
+        return True
+    today = timezone.localdate()
+    return school.demo_start_at <= today <= school.demo_end_at
+
+
+def _school_capacity_remaining(school: KidsSchool) -> int:
+    current = _school_distinct_enrolled_student_count(school.id)
+    return max(int(school.student_user_cap or 0) - current, 0)
+
+
+def _school_enrollment_block_reason(school: KidsSchool, seats_needed: int) -> str | None:
+    if seats_needed <= 0:
+        return None
+    if not _school_demo_window_active(school):
+        return "Demo süresi dışında öğrenci kaydı açılamaz."
+    remaining = _school_capacity_remaining(school)
+    if remaining < seats_needed:
+        return (
+            f"Okul öğrenci limiti dolu veya yetersiz. Kalan kapasite: {remaining}, "
+            f"istenen: {seats_needed}."
+        )
+    return None
+
+
 def _accept_invite_legacy(request, invite: KidsInvite, data: dict) -> Response:
     if not invite or not invite.is_valid():
         return Response(
@@ -364,6 +412,20 @@ def _accept_invite_legacy(request, invite: KidsInvite, data: dict) -> Response:
                 {"detail": "Bu sınıfa zaten kayıtlısınız. Giriş yapın."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        school = KidsSchool.objects.filter(pk=invite.kids_class.school_id).first()
+        needs_new_school_seat = not KidsEnrollment.objects.filter(
+            kids_class__school_id=invite.kids_class.school_id,
+            student=existing,
+        ).exists()
+        if school:
+            reason = _school_enrollment_block_reason(
+                school, seats_needed=1 if needs_new_school_seat else 0
+            )
+            if reason:
+                return Response(
+                    {"detail": reason},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         KidsEnrollment.objects.get_or_create(
             kids_class=invite.kids_class, student=existing
         )
@@ -388,6 +450,11 @@ def _accept_invite_legacy(request, invite: KidsInvite, data: dict) -> Response:
         last_name=data["last_name"],
         role=KidsUserRole.STUDENT,
     )
+    school = KidsSchool.objects.filter(pk=invite.kids_class.school_id).first()
+    if school:
+        reason = _school_enrollment_block_reason(school, seats_needed=1)
+        if reason:
+            return Response({"detail": reason}, status=status.HTTP_400_BAD_REQUEST)
     student.set_password(data["password"])
     student.save()
     KidsEnrollment.objects.get_or_create(kids_class=invite.kids_class, student=student)
@@ -422,6 +489,20 @@ def _accept_invite_family(request, invite: KidsInvite, data: dict) -> Response:
             status=status.HTTP_400_BAD_REQUEST,
         )
     with transaction.atomic():
+        school = (
+            KidsSchool.objects.select_for_update()
+            .filter(pk=invite.kids_class.school_id)
+            .first()
+        )
+        if school:
+            reason = _school_enrollment_block_reason(
+                school, seats_needed=len(data.get("children") or [])
+            )
+            if reason:
+                return Response(
+                    {"detail": reason},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         existing_main = MainUser.objects.select_for_update().filter(email__iexact=parent_email_norm).first()
         if existing_main:
             if not existing_main.check_password(data["parent_password"]):
@@ -1114,6 +1195,26 @@ class KidsAdminTeacherListCreateView(KidsAuthenticatedMixin, APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        school_ids = request.data.get("school_ids")
+        if school_ids is not None:
+            if not isinstance(school_ids, list):
+                return Response(
+                    {"detail": "school_ids bir tam sayı listesi olmalıdır."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            for sid in school_ids:
+                try:
+                    sid_int = int(sid)
+                except (TypeError, ValueError):
+                    return Response(
+                        {"detail": "Geçersiz okul kimliği."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if not KidsSchool.objects.filter(pk=sid_int).exists():
+                    return Response(
+                        {"detail": f"Okul bulunamadı (id={sid_int})."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
         temp_password = _random_temp_password()
         with transaction.atomic():
             teacher = MainUser.objects.create_user(
@@ -1124,6 +1225,14 @@ class KidsAdminTeacherListCreateView(KidsAuthenticatedMixin, APIView):
                 last_name=last_name[:150],
                 kids_portal_role=KidsPortalRole.TEACHER,
             )
+            if school_ids is not None:
+                for sid in school_ids:
+                    sid_int = int(sid)
+                    KidsSchoolTeacher.objects.update_or_create(
+                        school_id=sid_int,
+                        user_id=teacher.id,
+                        defaults={"is_active": True},
+                    )
         sent_ok, err = _send_kids_teacher_welcome_email(
             to_email=email,
             first_name=teacher.first_name,
@@ -1178,6 +1287,219 @@ class KidsAdminTeacherDetailPatchView(KidsAuthenticatedMixin, APIView):
                 }
             }
         )
+
+
+class KidsAdminSchoolListCreateView(KidsAuthenticatedMixin, APIView):
+    """Yönetim: okul listesi / oluşturma (yıllık kota ile)."""
+
+    authentication_classes = [KidsOrMainSiteStaffJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsKidsAdmin]
+
+    def get(self, request):
+        qs = (
+            KidsSchool.objects.all()
+            .prefetch_related("year_profiles", "school_teachers__user")
+            .order_by("name", "-id")
+        )
+        return Response({"schools": [_admin_school_detail_payload(s) for s in qs]})
+
+    def post(self, request):
+        ser = KidsAdminSchoolCreateSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        vd = ser.validated_data
+        year_profiles = vd.get("year_profiles") or []
+        with transaction.atomic():
+            school = KidsSchool.objects.create(
+                teacher=None,
+                name=vd["name"].strip(),
+                province=(vd.get("province") or "").strip(),
+                district=(vd.get("district") or "").strip(),
+                neighborhood=(vd.get("neighborhood") or "").strip(),
+                lifecycle_stage=vd.get("lifecycle_stage") or KidsSchool.LifecycleStage.DEMO,
+                demo_start_at=vd.get("demo_start_at"),
+                demo_end_at=vd.get("demo_end_at"),
+                student_user_cap=int(vd.get("student_user_cap") or 0),
+            )
+            for yp in year_profiles:
+                w = KidsSchoolYearProfileWriteSerializer(data=yp, context={"school": school})
+                w.is_valid(raise_exception=True)
+                wvd = w.validated_data
+                KidsSchoolYearProfile.objects.create(
+                    school=school,
+                    academic_year=wvd["academic_year"],
+                    contracted_student_count=int(wvd.get("contracted_student_count") or 0),
+                    notes=(wvd.get("notes") or "").strip(),
+                )
+        school = (
+            KidsSchool.objects.prefetch_related("year_profiles", "school_teachers__user")
+            .filter(pk=school.pk)
+            .first()
+        )
+        return Response(_admin_school_detail_payload(school), status=status.HTTP_201_CREATED)
+
+
+class KidsAdminSchoolDetailView(KidsAuthenticatedMixin, APIView):
+    authentication_classes = [KidsOrMainSiteStaffJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsKidsAdmin]
+
+    def get(self, request, pk: int):
+        school = (
+            KidsSchool.objects.prefetch_related("year_profiles", "school_teachers__user")
+            .filter(pk=pk)
+            .first()
+        )
+        if not school:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response(_admin_school_detail_payload(school))
+
+    def patch(self, request, pk: int):
+        school = KidsSchool.objects.filter(pk=pk).first()
+        if not school:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        ser = KidsSchoolSerializer(school, data=request.data, partial=True)
+        ser.is_valid(raise_exception=True)
+        ser.save()
+        school = (
+            KidsSchool.objects.prefetch_related("year_profiles", "school_teachers__user")
+            .filter(pk=pk)
+            .first()
+        )
+        return Response(_admin_school_detail_payload(school))
+
+    def delete(self, request, pk: int):
+        school = KidsSchool.objects.filter(pk=pk).first()
+        if not school:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        if school.kids_classes.exists():
+            return Response(
+                {
+                    "detail": "Bu okula bağlı sınıflar var. Önce sınıfları taşıyın veya silin.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        school.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class KidsAdminSchoolYearProfileListCreateView(KidsAuthenticatedMixin, APIView):
+    authentication_classes = [KidsOrMainSiteStaffJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsKidsAdmin]
+
+    def post(self, request, school_pk: int):
+        school = KidsSchool.objects.filter(pk=school_pk).first()
+        if not school:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        ser = KidsSchoolYearProfileWriteSerializer(data=request.data, context={"school": school})
+        ser.is_valid(raise_exception=True)
+        wvd = ser.validated_data
+        p = KidsSchoolYearProfile.objects.create(
+            school=school,
+            academic_year=wvd["academic_year"],
+            contracted_student_count=int(wvd.get("contracted_student_count") or 0),
+            notes=(wvd.get("notes") or "").strip(),
+        )
+        return Response(
+            {
+                "id": p.id,
+                "academic_year": p.academic_year,
+                "contracted_student_count": p.contracted_student_count,
+                "enrolled_student_count": enrolled_distinct_student_count_for_school_year(
+                    school.pk, p.academic_year
+                ),
+                "notes": p.notes or "",
+                "created_at": p.created_at,
+                "updated_at": p.updated_at,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class KidsAdminSchoolYearProfileDetailView(KidsAuthenticatedMixin, APIView):
+    authentication_classes = [KidsOrMainSiteStaffJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsKidsAdmin]
+
+    def patch(self, request, pk: int):
+        p = KidsSchoolYearProfile.objects.select_related("school").filter(pk=pk).first()
+        if not p:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        ser = KidsSchoolYearProfileWriteSerializer(
+            p,
+            data=request.data,
+            partial=True,
+            context={"school": p.school},
+        )
+        ser.is_valid(raise_exception=True)
+        ser.save()
+        p.refresh_from_db()
+        return Response(
+            {
+                "id": p.id,
+                "academic_year": p.academic_year,
+                "contracted_student_count": p.contracted_student_count,
+                "enrolled_student_count": enrolled_distinct_student_count_for_school_year(
+                    p.school_id, p.academic_year
+                ),
+                "notes": p.notes or "",
+                "created_at": p.created_at,
+                "updated_at": p.updated_at,
+            }
+        )
+
+    def delete(self, request, pk: int):
+        p = KidsSchoolYearProfile.objects.filter(pk=pk).first()
+        if not p:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        p.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class KidsAdminSchoolTeacherListCreateView(KidsAuthenticatedMixin, APIView):
+    authentication_classes = [KidsOrMainSiteStaffJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsKidsAdmin]
+
+    def post(self, request, school_pk: int):
+        school = KidsSchool.objects.filter(pk=school_pk).first()
+        if not school:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        ser = KidsAdminAssignSchoolTeacherSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        tid = ser.validated_data["teacher_user_id"]
+        teacher = MainUser.objects.filter(pk=tid, kids_portal_role=KidsPortalRole.TEACHER).first()
+        if not teacher:
+            return Response(
+                {"detail": "Bu kimlikte bir öğretmen hesabı yok."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        KidsSchoolTeacher.objects.update_or_create(
+            school_id=school.pk,
+            user_id=teacher.id,
+            defaults={"is_active": True},
+        )
+        school = (
+            KidsSchool.objects.prefetch_related("year_profiles", "school_teachers__user")
+            .filter(pk=school.pk)
+            .first()
+        )
+        return Response(_admin_school_detail_payload(school), status=status.HTTP_201_CREATED)
+
+
+class KidsAdminSchoolTeacherRemoveView(KidsAuthenticatedMixin, APIView):
+    authentication_classes = [KidsOrMainSiteStaffJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsKidsAdmin]
+
+    def delete(self, request, school_pk: int, teacher_user_id: int):
+        school = KidsSchool.objects.filter(pk=school_pk).first()
+        if not school:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        KidsSchoolTeacher.objects.filter(school_id=school_pk, user_id=teacher_user_id).delete()
+        if school.teacher_id == teacher_user_id:
+            KidsSchool.objects.filter(pk=school_pk).update(teacher_id=None)
+        school = (
+            KidsSchool.objects.prefetch_related("year_profiles", "school_teachers__user")
+            .filter(pk=school_pk)
+            .first()
+        )
+        return Response(_admin_school_detail_payload(school))
 
 
 class KidsAppConfigView(KidsAuthenticatedMixin, APIView):
@@ -1415,17 +1737,65 @@ class KidsClassDetailView(KidsAuthenticatedMixin, APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+def _admin_school_detail_payload(school: KidsSchool) -> dict:
+    enrolled_distinct_student_count = _school_distinct_enrolled_student_count(school.id)
+    profiles = []
+    for p in school.year_profiles.all().order_by("academic_year"):
+        profiles.append(
+            {
+                "id": p.id,
+                "academic_year": p.academic_year,
+                "contracted_student_count": p.contracted_student_count,
+                "enrolled_student_count": enrolled_distinct_student_count_for_school_year(
+                    school.pk, p.academic_year
+                ),
+                "notes": p.notes or "",
+                "created_at": p.created_at,
+                "updated_at": p.updated_at,
+            }
+        )
+    teachers = []
+    for m in school.school_teachers.filter(is_active=True).select_related("user"):
+        u = m.user
+        teachers.append(
+            {
+                "id": u.id,
+                "email": u.email,
+                "first_name": u.first_name or "",
+                "last_name": u.last_name or "",
+                "joined_at": m.joined_at,
+            }
+        )
+    base = KidsSchoolSerializer(school).data
+    return {
+        **base,
+        "year_profiles": profiles,
+        "teachers": teachers,
+        "enrolled_distinct_student_count": enrolled_distinct_student_count,
+        "capacity_remaining": max(int(school.student_user_cap or 0) - enrolled_distinct_student_count, 0),
+        "demo_is_active": _school_demo_window_active(school),
+    }
+
+
 class KidsSchoolListCreateView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def get(self, request):
-        qs = KidsSchool.objects.filter(teacher=request.user).order_by("name", "-id")
+        qs = schools_queryset_for_main_user(request.user)
         return Response(KidsSchoolSerializer(qs, many=True).data)
 
     def post(self, request):
+        if not is_kids_admin_user(request.user):
+            return Response(
+                {
+                    "detail": "Okul kaydı yalnızca yönetim panelinden yapılır. "
+                    "Lütfen yönetim ile iletişime geçin veya yönetim hesabıyla giriş yapın.",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         ser = KidsSchoolSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
-        school = ser.save(teacher=request.user)
+        school = ser.save(teacher=None)
         return Response(KidsSchoolSerializer(school).data, status=status.HTTP_201_CREATED)
 
 
@@ -1433,7 +1803,7 @@ class KidsSchoolDetailView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def get_object(self, request, pk):
-        return KidsSchool.objects.filter(pk=pk, teacher=request.user).first()
+        return schools_queryset_for_main_user(request.user).filter(pk=pk).first()
 
     def get(self, request, pk):
         obj = self.get_object(request, pk)
@@ -1452,7 +1822,12 @@ class KidsSchoolDetailView(KidsAuthenticatedMixin, APIView):
         return Response(KidsSchoolSerializer(obj).data)
 
     def delete(self, request, pk):
-        obj = self.get_object(request, pk)
+        if not is_kids_admin_user(request.user):
+            return Response(
+                {"detail": "Okul silme yalnızca yönetim içindir."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        obj = schools_queryset_for_main_user(request.user).filter(pk=pk).first()
         if not obj:
             return Response(status=status.HTTP_404_NOT_FOUND)
         if obj.kids_classes.exists():
@@ -2505,6 +2880,58 @@ class MebSchoolPickListView(KidsAuthenticatedMixin, APIView):
                     for r in rows
                 ]
             }
+        )
+
+
+class MebSchoolManualCreateView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsAdmin]
+
+    def post(self, request):
+        province = (request.data.get("province") or "").strip()
+        district = (request.data.get("district") or "").strip()
+        name = (request.data.get("name") or "").strip()
+        if not province or not district or not name:
+            return Response(
+                {"detail": "province, district ve name zorunludur."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        province = province[:100]
+        district = district[:100]
+        name = name[:500]
+        line_full = f"{province} - {district} - {name}"
+        existing = MebSchoolDirectory.objects.filter(
+            province__iexact=province,
+            district__iexact=district,
+            name__iexact=name,
+        ).first()
+        created = False
+        if existing:
+            row = existing
+        else:
+            pk = il_name_to_plaka_int(province)
+            row = MebSchoolDirectory.objects.create(
+                yol=f"manual-{uuid.uuid4().hex[:24]}",
+                province=province,
+                district=district,
+                name=name,
+                line_full=line_full,
+                il_plaka=str(pk) if pk else "",
+            )
+            created = True
+
+        return Response(
+            {
+                "created": created,
+                "school": {
+                    "yol": row.yol,
+                    "name": row.name,
+                    "province": row.province,
+                    "district": row.district,
+                    "line_full": row.line_full,
+                },
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
 
 

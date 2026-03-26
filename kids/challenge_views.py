@@ -1,6 +1,7 @@
 """Sınıf challenge API: öğrenci önerisi, öğretmen onayı, davet, öğretmen yarışması."""
 import logging
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import F, Prefetch, Q
 from django.utils import timezone
@@ -157,7 +158,15 @@ class KidsStudentChallengeListCreateView(KidsAuthenticatedMixin, APIView):
         for inv in invites:
             ensure_challenge_time_state(inv.challenge)
         inv_ser = KidsChallengeInviteReadSerializer(invites, many=True, context={"request": request})
-        return Response({"challenges": ser.data, "pending_invites": inv_ser.data})
+        return Response(
+            {
+                "challenges": ser.data,
+                "pending_invites": inv_ser.data,
+                "allow_free_parent_challenge": bool(
+                    getattr(settings, "KIDS_STUDENT_FREE_CHALLENGE_ENABLED", True)
+                ),
+            }
+        )
 
     def post(self, request):
         if not is_kids_student_user(request.user):
@@ -168,6 +177,14 @@ class KidsStudentChallengeListCreateView(KidsAuthenticatedMixin, APIView):
         ser = KidsStudentChallengeProposeSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         scope = ser.validated_data.get("peer_scope") or KidsChallenge.PeerScope.CLASS_PEER
+        free_enabled = bool(
+            getattr(settings, "KIDS_STUDENT_FREE_CHALLENGE_ENABLED", True)
+        )
+        if scope == KidsChallenge.PeerScope.FREE_PARENT and not free_enabled:
+            return Response(
+                {"detail": "Serbest yarışma şu anda kapalı."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if scope == KidsChallenge.PeerScope.FREE_PARENT:
             ok, err = can_propose_free_parent_challenge(request.user)
             if not ok:

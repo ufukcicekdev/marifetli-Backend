@@ -91,17 +91,34 @@ class KidsUser(models.Model):
 
 
 class KidsSchool(models.Model):
-    """Öğretmenin tanımladığı okul; sınıflar buradan seçilir."""
+    """Okul kaydı; sınıflar buradan seçilir. Yönetim panelinden açılır veya (eski) öğretmen kaydıyla oluşturulmuş olabilir."""
+
+    class LifecycleStage(models.TextChoices):
+        DEMO = "demo", "Demo"
+        SALES = "sales", "Satış"
 
     teacher = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="kids_schools",
+        null=True,
+        blank=True,
+        help_text="Eski kayıtlar: okulu oluşturan öğretmen. Yeni akışta boş olabilir; atamalar KidsSchoolTeacher ile yapılır.",
     )
     name = models.CharField("okul adı", max_length=200)
     province = models.CharField("il", max_length=100, blank=True)
     district = models.CharField("ilçe", max_length=100, blank=True)
     neighborhood = models.CharField("mahalle", max_length=150, blank=True)
+    lifecycle_stage = models.CharField(
+        "yaşam döngüsü",
+        max_length=16,
+        choices=LifecycleStage.choices,
+        default=LifecycleStage.SALES,
+        db_index=True,
+    )
+    demo_start_at = models.DateField("demo başlangıç", null=True, blank=True)
+    demo_end_at = models.DateField("demo bitiş", null=True, blank=True)
+    student_user_cap = models.PositiveIntegerField("öğrenci limiti", default=30)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -111,6 +128,70 @@ class KidsSchool(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class KidsSchoolTeacher(models.Model):
+    """Okul ile öğretmen hesabı arasındaki üyelik (çok öğretmen, tek okul)."""
+
+    school = models.ForeignKey(
+        "KidsSchool",
+        on_delete=models.CASCADE,
+        related_name="school_teachers",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="kids_school_memberships",
+    )
+    is_active = models.BooleanField(default=True)
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "kids_school_teachers"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "user"],
+                name="kids_school_teacher_uniq",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.school_id} → {self.user_id}"
+
+
+class KidsSchoolYearProfile(models.Model):
+    """Eğitim-öğretim yılı başına manuel öğrenci kotası (ödeme entegrasyonu yok)."""
+
+    school = models.ForeignKey(
+        "KidsSchool",
+        on_delete=models.CASCADE,
+        related_name="year_profiles",
+    )
+    academic_year = models.CharField(
+        "eğitim-öğretim yılı",
+        max_length=16,
+        db_index=True,
+        help_text="Örn. 2025-2026 (KidsClass.academic_year_label ile eşleşmeli).",
+    )
+    contracted_student_count = models.PositiveIntegerField(
+        "sözleşmeli öğrenci sayısı",
+        default=0,
+    )
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_school_year_profiles"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["school", "academic_year"],
+                name="kids_school_academic_year_uniq",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.school_id} {self.academic_year}"
 
 
 class KidsClass(models.Model):

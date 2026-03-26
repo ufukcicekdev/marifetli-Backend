@@ -1,3 +1,4 @@
+import re
 from datetime import timedelta
 
 from django.utils import timezone
@@ -5,6 +6,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from .auth_utils import is_kids_teacher_or_admin_user, is_main_user
+from .school_access import schools_queryset_for_main_user
 from .class_names import normalize_kids_class_name
 from .models import (
     KidsAssignment,
@@ -21,6 +23,8 @@ from .models import (
     KidsNotification,
     KidsParentGamePolicy,
     KidsSchool,
+    KidsSchoolTeacher,
+    KidsSchoolYearProfile,
     KidsSubmission,
     KidsUser,
     KidsUserRole,
@@ -165,8 +169,145 @@ class KidsUserProfileUpdateSerializer(serializers.ModelSerializer):
 class KidsSchoolSerializer(serializers.ModelSerializer):
     class Meta:
         model = KidsSchool
-        fields = ("id", "name", "province", "district", "neighborhood", "created_at", "updated_at")
+        fields = (
+            "id",
+            "name",
+            "province",
+            "district",
+            "neighborhood",
+            "lifecycle_stage",
+            "demo_start_at",
+            "demo_end_at",
+            "student_user_cap",
+            "created_at",
+            "updated_at",
+        )
         read_only_fields = ("id", "created_at", "updated_at")
+
+    def validate(self, attrs):
+        stage = attrs.get("lifecycle_stage")
+        start = attrs.get("demo_start_at")
+        end = attrs.get("demo_end_at")
+        cap = attrs.get("student_user_cap")
+        if stage is None:
+            stage = KidsSchool.LifecycleStage.SALES
+        if cap is None:
+            cap = 30
+        if self.instance:
+            if stage is None:
+                stage = self.instance.lifecycle_stage
+            if start is None:
+                start = self.instance.demo_start_at
+            if end is None:
+                end = self.instance.demo_end_at
+            if cap is None:
+                cap = self.instance.student_user_cap
+        if cap is None or int(cap) <= 0:
+            raise serializers.ValidationError(
+                {"student_user_cap": "Öğrenci limiti 1 veya daha büyük olmalı."}
+            )
+        if stage == KidsSchool.LifecycleStage.DEMO and bool(start) != bool(end):
+            raise serializers.ValidationError(
+                {
+                    "demo_end_at": "Demo okullarda başlangıç ve bitiş tarihi birlikte girilmeli."
+                }
+            )
+        if start and end and end < start:
+            raise serializers.ValidationError(
+                {"demo_end_at": "Demo bitiş tarihi başlangıçtan önce olamaz."}
+            )
+        return attrs
+
+
+ACADEMIC_YEAR_CONTRACT_RE = re.compile(r"^\d{4}-\d{4}$")
+
+
+def validate_academic_year_contract_format(value: str) -> str:
+    s = (value or "").strip()
+    if not s:
+        raise serializers.ValidationError("Eğitim-öğretim yılı zorunludur.")
+    if not ACADEMIC_YEAR_CONTRACT_RE.match(s):
+        raise serializers.ValidationError("Format: YYYY-YYYY (örn. 2025-2026).")
+    a, b = s.split("-", 1)
+    try:
+        y1, y2 = int(a), int(b)
+    except ValueError as e:
+        raise serializers.ValidationError("Geçersiz yıl.") from e
+    if y2 != y1 + 1:
+        raise serializers.ValidationError(
+            "İkinci yıl, birinci yılın bir sonraki yılı olmalıdır (örn. 2025-2026)."
+        )
+    return s
+
+
+class KidsSchoolYearProfileWriteSerializer(serializers.ModelSerializer):
+    """Admin: kota oluşturma / güncelleme."""
+
+    class Meta:
+        model = KidsSchoolYearProfile
+        fields = ("academic_year", "contracted_student_count", "notes")
+
+    def validate_academic_year(self, value):
+        v = validate_academic_year_contract_format(value)
+        school = self.context.get("school") or (
+            self.instance.school if getattr(self, "instance", None) and self.instance else None
+        )
+        if school:
+            qs = KidsSchoolYearProfile.objects.filter(school=school, academic_year=v)
+            if self.instance and getattr(self.instance, "pk", None):
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError("Bu okul için bu eğitim yılı zaten tanımlı.")
+        return v
+
+
+class KidsAdminAssignSchoolTeacherSerializer(serializers.Serializer):
+    teacher_user_id = serializers.IntegerField(min_value=1)
+
+
+class KidsAdminSchoolCreateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=200)
+    province = serializers.CharField(max_length=100, allow_blank=True, default="")
+    district = serializers.CharField(max_length=100, allow_blank=True, default="")
+    neighborhood = serializers.CharField(max_length=150, allow_blank=True, default="")
+    lifecycle_stage = serializers.ChoiceField(
+        choices=KidsSchool.LifecycleStage.choices,
+        default=KidsSchool.LifecycleStage.DEMO,
+    )
+    demo_start_at = serializers.DateField(required=False, allow_null=True)
+    demo_end_at = serializers.DateField(required=False, allow_null=True)
+    student_user_cap = serializers.IntegerField(min_value=1)
+    year_profiles = KidsSchoolYearProfileWriteSerializer(many=True, required=False, allow_empty=True)
+
+    def validate(self, attrs):
+        yps = attrs.get("year_profiles")
+        if not yps:
+            return attrs
+        years = []
+        for yp in yps:
+            if not isinstance(yp, dict):
+                continue
+            ay = (yp.get("academic_year") or "").strip()
+            if ay:
+                years.append(ay)
+        if len(years) != len(set(years)):
+            raise serializers.ValidationError(
+                {"year_profiles": "Aynı eğitim yılı iki kez eklenemez."}
+            )
+        stage = attrs.get("lifecycle_stage")
+        ds = attrs.get("demo_start_at")
+        de = attrs.get("demo_end_at")
+        if stage == KidsSchool.LifecycleStage.DEMO and bool(ds) != bool(de):
+            raise serializers.ValidationError(
+                {
+                    "demo_end_at": "Demo okullarda başlangıç ve bitiş tarihi birlikte girilmeli."
+                }
+            )
+        if ds and de and de < ds:
+            raise serializers.ValidationError(
+                {"demo_end_at": "Demo bitiş tarihi başlangıçtan önce olamaz."}
+            )
+        return attrs
 
 
 class KidsClassSerializer(serializers.ModelSerializer):
@@ -208,7 +349,7 @@ class KidsClassSerializer(serializers.ModelSerializer):
             and is_main_user(user)
             and is_kids_teacher_or_admin_user(user)
         ):
-            self.fields["school_id"].queryset = KidsSchool.objects.filter(teacher=user)
+            self.fields["school_id"].queryset = schools_queryset_for_main_user(user)
 
     def validate_name(self, value):
         s = (value or "").strip()

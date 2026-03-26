@@ -343,6 +343,10 @@ KIDS_CHALLENGE_STUDENT_START_INTERVAL_DAYS = config(
 KIDS_CHALLENGE_STUDENT_MAX_STARTS_PER_WINDOW = config(
     "KIDS_CHALLENGE_STUDENT_MAX_STARTS_PER_WINDOW", default=1, cast=int
 )
+# Öğrenci yarışmaları ekranında "Serbest yarışma" (veli onaylı) seçeneği.
+KIDS_STUDENT_FREE_CHALLENGE_ENABLED = config(
+    "KIDS_STUDENT_FREE_CHALLENGE_ENABLED", default=True, cast=bool
+)
 # Backend URL - e-posta şablonlarındaki logo vb. mutlak URL'ler için (örn. https://api.marifetli.com.tr)
 BACKEND_URL = config("BACKEND_URL", default="").strip().rstrip("/") or None
 

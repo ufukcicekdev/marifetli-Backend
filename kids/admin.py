@@ -17,6 +17,8 @@ from .models import (
     KidsNotification,
     KidsParentGamePolicy,
     KidsSchool,
+    KidsSchoolTeacher,
+    KidsSchoolYearProfile,
     KidsSubmission,
     KidsUser,
     KidsUserBadge,
@@ -112,6 +114,20 @@ class KidsSchoolAdmin(admin.ModelAdmin):
     list_display = ("name", "province", "district", "teacher", "created_at")
     search_fields = ("name", "province", "district", "teacher__email")
     list_filter = ("teacher",)
+
+
+@admin.register(KidsSchoolTeacher)
+class KidsSchoolTeacherAdmin(admin.ModelAdmin):
+    list_display = ("school", "user", "is_active", "joined_at")
+    list_filter = ("is_active",)
+    search_fields = ("school__name", "user__email")
+
+
+@admin.register(KidsSchoolYearProfile)
+class KidsSchoolYearProfileAdmin(admin.ModelAdmin):
+    list_display = ("school", "academic_year", "contracted_student_count", "updated_at")
+    list_filter = ("academic_year",)
+    search_fields = ("school__name", "academic_year")
 
 
 @admin.register(KidsClass)

@@ -29,6 +29,24 @@ urlpatterns = [
     ),
     path("admin/teachers/", views.KidsAdminTeacherListCreateView.as_view()),
     path("admin/teachers/<int:pk>/", views.KidsAdminTeacherDetailPatchView.as_view()),
+    path("admin/schools/", views.KidsAdminSchoolListCreateView.as_view()),
+    path("admin/schools/<int:pk>/", views.KidsAdminSchoolDetailView.as_view()),
+    path(
+        "admin/schools/<int:school_pk>/year-profiles/",
+        views.KidsAdminSchoolYearProfileListCreateView.as_view(),
+    ),
+    path(
+        "admin/school-year-profiles/<int:pk>/",
+        views.KidsAdminSchoolYearProfileDetailView.as_view(),
+    ),
+    path(
+        "admin/schools/<int:school_pk>/teachers/",
+        views.KidsAdminSchoolTeacherListCreateView.as_view(),
+    ),
+    path(
+        "admin/schools/<int:school_pk>/teachers/<int:teacher_user_id>/",
+        views.KidsAdminSchoolTeacherRemoveView.as_view(),
+    ),
     path("config/", views.KidsAppConfigView.as_view()),
     path("profile/photo/", views.KidsProfilePhotoView.as_view()),
     path("auth/accept-invite/", views.KidsAcceptInviteView.as_view()),
@@ -38,6 +56,7 @@ urlpatterns = [
     path("meb-schools/provinces/", views.MebProvinceListView.as_view()),
     path("meb-schools/districts/", views.MebDistrictListView.as_view()),
     path("meb-schools/pick/", views.MebSchoolPickListView.as_view()),
+    path("admin/meb-schools/manual/", views.MebSchoolManualCreateView.as_view()),
     path("classes/", views.KidsClassListCreateView.as_view()),
     path("classes/<int:class_id>/invite-link/", views.KidsClassInviteLinkCreateView.as_view()),
     path("classes/<int:pk>/", views.KidsClassDetailView.as_view()),
