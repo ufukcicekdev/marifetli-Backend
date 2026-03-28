@@ -2744,6 +2744,12 @@ def _send_message_notifications(msg: KidsMessage) -> None:
     body = f"{sender_label}: {msg.body[:120]}"
     for kind, who in recipients:
         if kind == "student":
+            KidsNotification.objects.filter(
+                recipient_student=who,
+                notification_type=KidsNotification.NotificationType.NEW_MESSAGE,
+                conversation=conv,
+                is_read=False,
+            ).delete()
             create_kids_notification(
                 recipient_student=who,
                 sender_student=sender_student,
@@ -2754,6 +2760,12 @@ def _send_message_notifications(msg: KidsMessage) -> None:
                 message_record=msg,
             )
         else:
+            KidsNotification.objects.filter(
+                recipient_user=who,
+                notification_type=KidsNotification.NotificationType.NEW_MESSAGE,
+                conversation=conv,
+                is_read=False,
+            ).delete()
             create_kids_notification(
                 recipient_user=who,
                 sender_student=sender_student,
