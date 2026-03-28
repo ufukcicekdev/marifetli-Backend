@@ -8,6 +8,7 @@ urlpatterns = [
     path("auth/confirm-password-reset/", views.KidsPasswordResetConfirmView.as_view()),
     path("auth/refresh/", views.KidsTokenRefreshView.as_view()),
     path("auth/me/", views.KidsMeView.as_view()),
+    path("auth/parent/verify-password/", views.KidsParentPasswordVerifyView.as_view()),
     path("auth/parent/switch-student/", views.KidsParentSwitchStudentView.as_view()),
     path("parent/children-overview/", views.KidsParentChildrenOverviewView.as_view()),
     path(

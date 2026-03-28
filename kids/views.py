@@ -229,12 +229,22 @@ def _parent_child_overview_dict(student: KidsUser) -> dict:
     )
     classes_data = []
     if class_ids:
-        for kc in KidsClass.objects.filter(id__in=class_ids).select_related("school").order_by("name"):
+        for kc in (
+            KidsClass.objects.filter(id__in=class_ids)
+            .select_related("school", "teacher")
+            .order_by("name")
+        ):
+            teacher_display = (
+                f"{(kc.teacher.first_name or '').strip()} {(kc.teacher.last_name or '').strip()}".strip()
+                or (kc.teacher.email or "")
+            )
             classes_data.append(
                 {
                     "id": kc.id,
                     "name": kc.name,
                     "school_name": kc.school.name if kc.school else "",
+                    "teacher_user_id": kc.teacher_id,
+                    "teacher_display": teacher_display,
                 }
             )
 
@@ -1038,6 +1048,27 @@ class KidsParentSwitchStudentView(KidsAuthenticatedMixin, APIView):
                 "user": _kids_user_payload(student, request),
             }
         )
+
+
+class KidsParentPasswordVerifyView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsParent]
+
+    def post(self, request):
+        password = request.data.get("password") or ""
+        if not password:
+            return Response(
+                {"detail": "Şifre gerekli."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user = request.user
+        if not user.is_active or getattr(user, "is_deactivated", False):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        if not user.check_password(password):
+            return Response(
+                {"detail": "Şifre doğrulanamadı."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response({"ok": True})
 
 
 class KidsParentChildrenOverviewView(KidsAuthenticatedMixin, APIView):
@@ -2807,9 +2838,21 @@ class KidsConversationListCreateView(KidsAuthenticatedMixin, APIView):
             if not teacher_id:
                 return Response({"detail": "teacher_user_id zorunludur."}, status=status.HTTP_400_BAD_REQUEST)
             try:
-                teacher_user = MainUser.objects.get(pk=int(teacher_id))
+                teacher_user = MainUser.objects.get(
+                    pk=int(teacher_id),
+                    kids_portal_role=KidsPortalRole.TEACHER,
+                )
             except (MainUser.DoesNotExist, TypeError, ValueError):
                 return Response({"detail": "Öğretmen bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
+            teaches_student = KidsClass.objects.filter(
+                teacher=teacher_user,
+                enrollments__student=student,
+            ).exists()
+            if not teaches_student:
+                return Response(
+                    {"detail": "Seçilen öğretmen bu öğrencinin sınıfında değil."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             parent_user = actor
         elif is_kids_teacher_or_admin_user(actor):
             parent_user = student.parent_account
@@ -2833,12 +2876,18 @@ class KidsConversationListCreateView(KidsAuthenticatedMixin, APIView):
                 kids_class = KidsClass.objects.get(pk=int(class_id))
             except (KidsClass.DoesNotExist, TypeError, ValueError):
                 return Response({"detail": "Sınıf bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
+            if not KidsEnrollment.objects.filter(kids_class=kids_class, student=student).exists():
+                return Response({"detail": "Öğrenci bu sınıfta değil."}, status=status.HTTP_400_BAD_REQUEST)
+            if teacher_user and kids_class.teacher_id != teacher_user.id:
+                return Response(
+                    {"detail": "Sınıf ve öğretmen eşleşmiyor."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         if kids_class is None:
-            kids_class = (
-                KidsClass.objects.filter(enrollments__student=student)
-                .order_by("-id")
-                .first()
-            )
+            classes_for_student = KidsClass.objects.filter(enrollments__student=student)
+            if teacher_user:
+                classes_for_student = classes_for_student.filter(teacher=teacher_user)
+            kids_class = classes_for_student.order_by("-id").first()
         topic = (request.data.get("topic") or "").strip()[:200]
         conv, created = KidsConversation.objects.get_or_create(
             kids_class=kids_class,
