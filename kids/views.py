@@ -29,7 +29,9 @@ from .badges import (
 )
 from .auth_utils import (
     is_kids_admin_user,
+    is_kids_parent_user,
     is_kids_student_user,
+    is_kids_teacher_or_admin_user,
     is_main_user,
     may_access_kids_with_main_jwt,
 )
@@ -37,9 +39,11 @@ from .authentication import KidsJWTAuthentication, KidsOrMainSiteStaffJWTAuthent
 from .jwt_utils import kids_decode_token, kids_encode_token
 from .main_site_bridge import provision_kids_parent_user, unique_username_from_email
 from .models import (
+    KidsAnnouncement,
     KidsAssignment,
     KidsChallengeMember,
     KidsClass,
+    KidsConversation,
     KidsEnrollment,
     KidsFCMDeviceToken,
     KidsFreestylePost,
@@ -47,6 +51,8 @@ from .models import (
     KidsGameProgress,
     KidsGameSession,
     KidsInvite,
+    KidsMessage,
+    KidsMessageReadState,
     KidsNotification,
     KidsParentGamePolicy,
     KidsSchool,
@@ -58,7 +64,11 @@ from .models import (
     KidsUserRole,
     MebSchoolDirectory,
 )
-from .notifications_service import notify_students_new_assignment, notify_teacher_submission_received
+from .notifications_service import (
+    create_kids_notification,
+    notify_students_new_assignment,
+    notify_teacher_submission_received,
+)
 from .permissions import IsKidsAdmin, IsKidsParent, IsKidsTeacherOrAdmin
 from .meb_directory import split_line_full_location
 from .school_access import enrolled_distinct_student_count_for_school_year, schools_queryset_for_main_user
@@ -73,6 +83,7 @@ from users.utils import generate_verification_token
 
 from .serializers import (
     _absolute_media_url,
+    KidsAnnouncementSerializer,
     KidsAcceptInviteFamilySerializer,
     KidsAcceptInviteLegacySerializer,
     KidsClassInviteLinkSerializer,
@@ -80,10 +91,12 @@ from .serializers import (
     KidsAdminAssignSchoolTeacherSerializer,
     KidsAdminSchoolCreateSerializer,
     KidsClassSerializer,
+    KidsConversationSerializer,
     KidsEnrollmentSerializer,
     KidsFreestylePostSerializer,
     KidsInviteCreateSerializer,
     KidsInviteSerializer,
+    KidsMessageSerializer,
     KidsGameSerializer,
     KidsGameSessionCompleteSerializer,
     KidsGameSessionSerializer,
@@ -742,14 +755,23 @@ def _daily_quest_score_target(difficulty: str) -> int:
     return 50
 
 
-def _assignment_submission_window_error(assignment) -> str | None:
-    """Tarih penceresi dışında teslim string hatası; None = devam. Eski projeler (tarih yok) serbest."""
+def _assignment_submission_late_state(assignment) -> tuple[bool, str | None]:
+    """Eski challenge akışı: geç teslim yok, pencere dışı engel."""
     now = timezone.now()
     if assignment.submission_opens_at and now < assignment.submission_opens_at:
-        return "Teslim dönemi henüz başlamadı."
-    if assignment.submission_closes_at and now > assignment.submission_closes_at:
-        return "Teslim süresi doldu."
-    return None
+        return False, "Teslim dönemi henüz başlamadı."
+    closes = assignment.submission_closes_at
+    if not closes:
+        return False, None
+    if now > closes:
+        return False, "Teslim süresi doldu."
+    return False, None
+
+
+def _assignment_submission_window_error(assignment) -> str | None:
+    """Tarih penceresi dışında teslim string hatası; None = devam."""
+    _, err = _assignment_submission_late_state(assignment)
+    return err
 
 
 def _assignment_visible_to_students(assignment) -> bool:
@@ -2415,7 +2437,7 @@ class KidsSubmissionCreateView(KidsAuthenticatedMixin, APIView):
                 {"detail": "Bu proje yayından kaldırıldı."},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        win_err = _assignment_submission_window_error(assignment)
+        is_late_submission, win_err = _assignment_submission_late_state(assignment)
         if win_err:
             return Response({"detail": win_err}, status=status.HTTP_400_BAD_REQUEST)
         kind = ser.validated_data.get("kind") or KidsSubmission.SubmissionKind.STEPS
@@ -2442,8 +2464,16 @@ class KidsSubmissionCreateView(KidsAuthenticatedMixin, APIView):
             existing.steps_payload = steps_payload
             existing.video_url = video_url
             existing.caption = ser.validated_data.get("caption") or ""
+            existing.is_late_submission = False
             existing.save(
-                update_fields=["kind", "steps_payload", "video_url", "caption", "updated_at"]
+                update_fields=[
+                    "kind",
+                    "steps_payload",
+                    "video_url",
+                    "caption",
+                    "is_late_submission",
+                    "updated_at",
+                ]
             )
             return Response(KidsSubmissionSerializer(existing).data, status=status.HTTP_200_OK)
         sub = KidsSubmission.objects.create(
@@ -2454,6 +2484,7 @@ class KidsSubmissionCreateView(KidsAuthenticatedMixin, APIView):
             steps_payload=steps_payload,
             video_url=video_url,
             caption=ser.validated_data.get("caption") or "",
+            is_late_submission=False,
         )
         sid = sub.pk
         transaction.on_commit(lambda: notify_teacher_submission_received(sid))
@@ -2564,12 +2595,18 @@ class KidsSubmissionReviewView(KidsAuthenticatedMixin, APIView):
             locked.teacher_review_valid = valid
             locked.teacher_review_positive = positive
             locked.teacher_note_to_student = note
+            locked.rubric_scores = []
+            locked.rubric_total_score = None
+            locked.rubric_feedback = ""
             locked.teacher_reviewed_at = timezone.now()
             locked.save(
                 update_fields=[
                     "teacher_review_valid",
                     "teacher_review_positive",
                     "teacher_note_to_student",
+                    "rubric_scores",
+                    "rubric_total_score",
+                    "rubric_feedback",
                     "teacher_reviewed_at",
                     "updated_at",
                 ]
@@ -2670,6 +2707,328 @@ class KidsFreestyleListCreateView(KidsAuthenticatedMixin, APIView):
         return Response(KidsFreestylePostSerializer(post).data, status=status.HTTP_201_CREATED)
 
 
+def _conversation_queryset_for_user(u):
+    qs = KidsConversation.objects.select_related("kids_class", "student", "parent_user", "teacher_user")
+    if is_kids_student_user(u):
+        return qs.filter(student=u)
+    if not is_main_user(u):
+        return qs.none()
+    if is_kids_admin_user(u):
+        return qs
+    if is_kids_parent_user(u):
+        return qs.filter(parent_user=u)
+    if is_kids_teacher_or_admin_user(u):
+        return qs.filter(teacher_user=u)
+    return qs.none()
+
+
+def _send_message_notifications(msg: KidsMessage) -> None:
+    conv = msg.conversation
+    sender_student = msg.sender_student
+    sender_user = msg.sender_user
+    sender_main_id = sender_user.id if sender_user else None
+
+    recipients = []
+    if conv.teacher_user_id and conv.teacher_user_id != sender_main_id:
+        recipients.append(("user", conv.teacher_user))
+    if conv.parent_user_id and conv.parent_user_id != sender_main_id:
+        recipients.append(("user", conv.parent_user))
+    if conv.student_id and (not sender_student or conv.student_id != sender_student.id):
+        recipients.append(("student", conv.student))
+
+    sender_label = (
+        sender_student.full_name
+        if sender_student
+        else ((sender_user.first_name or "").strip() or sender_user.email if sender_user else "Sistem")
+    )
+    body = f"{sender_label}: {msg.body[:120]}"
+    for kind, who in recipients:
+        if kind == "student":
+            create_kids_notification(
+                recipient_student=who,
+                sender_student=sender_student,
+                sender_user=sender_user,
+                notification_type=KidsNotification.NotificationType.NEW_MESSAGE,
+                message=body,
+                conversation=conv,
+                message_record=msg,
+            )
+        else:
+            create_kids_notification(
+                recipient_user=who,
+                sender_student=sender_student,
+                sender_user=sender_user,
+                notification_type=KidsNotification.NotificationType.NEW_MESSAGE,
+                message=body,
+                conversation=conv,
+                message_record=msg,
+            )
+
+
+class KidsConversationListCreateView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = _conversation_queryset_for_user(request.user).order_by("-last_message_at", "-created_at")
+        return Response(KidsConversationSerializer(qs, many=True, context={"request": request}).data)
+
+    def post(self, request):
+        student_id = request.data.get("student_id")
+        if not student_id:
+            return Response({"detail": "student_id zorunludur."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            student_id = int(student_id)
+        except (TypeError, ValueError):
+            return Response({"detail": "student_id geçersiz."}, status=status.HTTP_400_BAD_REQUEST)
+        student = KidsUser.objects.filter(pk=student_id).first()
+        if not student:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        actor = request.user
+        parent_user = None
+        teacher_user = None
+
+        if is_kids_parent_user(actor):
+            if student.parent_account_id != actor.id:
+                return Response({"detail": "Bu öğrenci ile mesaj başlatamazsın."}, status=status.HTTP_403_FORBIDDEN)
+            teacher_id = request.data.get("teacher_user_id")
+            if not teacher_id:
+                return Response({"detail": "teacher_user_id zorunludur."}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                teacher_user = MainUser.objects.get(pk=int(teacher_id))
+            except (MainUser.DoesNotExist, TypeError, ValueError):
+                return Response({"detail": "Öğretmen bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
+            parent_user = actor
+        elif is_kids_teacher_or_admin_user(actor):
+            parent_user = student.parent_account
+            if not parent_user:
+                return Response({"detail": "Öğrencinin bağlı veli hesabı yok."}, status=status.HTTP_400_BAD_REQUEST)
+            teacher_user = actor
+            if not is_kids_admin_user(actor):
+                teaches_student = KidsClass.objects.filter(
+                    teacher=actor,
+                    enrollments__student=student,
+                ).exists()
+                if not teaches_student:
+                    return Response({"detail": "Bu öğrenci sizin sınıfınızda değil."}, status=status.HTTP_403_FORBIDDEN)
+        else:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+
+        class_id = request.data.get("kids_class_id")
+        kids_class = None
+        if class_id:
+            try:
+                kids_class = KidsClass.objects.get(pk=int(class_id))
+            except (KidsClass.DoesNotExist, TypeError, ValueError):
+                return Response({"detail": "Sınıf bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
+        if kids_class is None:
+            kids_class = (
+                KidsClass.objects.filter(enrollments__student=student)
+                .order_by("-id")
+                .first()
+            )
+        topic = (request.data.get("topic") or "").strip()[:200]
+        conv, created = KidsConversation.objects.get_or_create(
+            kids_class=kids_class,
+            student=student,
+            parent_user=parent_user,
+            teacher_user=teacher_user,
+            defaults={"topic": topic},
+        )
+        if created and topic and not conv.topic:
+            conv.topic = topic
+            conv.save(update_fields=["topic", "updated_at"])
+        first_message = (request.data.get("message") or "").strip()
+        if created and first_message:
+            msg = KidsMessage.objects.create(
+                conversation=conv,
+                sender_user=actor if is_main_user(actor) else None,
+                sender_student=actor if is_kids_student_user(actor) else None,
+                body=first_message[:4000],
+            )
+            conv.last_message_at = msg.created_at
+            conv.save(update_fields=["last_message_at", "updated_at"])
+            _send_message_notifications(msg)
+        return Response(
+            KidsConversationSerializer(conv, context={"request": request}).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class KidsConversationDetailView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        conv = _conversation_queryset_for_user(request.user).filter(pk=pk).first()
+        if not conv:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response(KidsConversationSerializer(conv, context={"request": request}).data)
+
+
+class KidsConversationMessageListCreateView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, conversation_id):
+        conv = _conversation_queryset_for_user(request.user).filter(pk=conversation_id).first()
+        if not conv:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        msgs = conv.messages.select_related("sender_student", "sender_user").order_by("created_at")
+        return Response(KidsMessageSerializer(msgs, many=True, context={"request": request}).data)
+
+    def post(self, request, conversation_id):
+        conv = _conversation_queryset_for_user(request.user).filter(pk=conversation_id).first()
+        if not conv:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        body = (request.data.get("body") or "").strip()
+        if not body:
+            return Response({"detail": "Mesaj metni zorunludur."}, status=status.HTTP_400_BAD_REQUEST)
+        msg = KidsMessage.objects.create(
+            conversation=conv,
+            sender_student=request.user if is_kids_student_user(request.user) else None,
+            sender_user=request.user if is_main_user(request.user) else None,
+            body=body[:4000],
+        )
+        conv.last_message_at = msg.created_at
+        conv.save(update_fields=["last_message_at", "updated_at"])
+        if is_kids_student_user(request.user):
+            KidsMessageReadState.objects.update_or_create(
+                conversation=conv,
+                student=request.user,
+                defaults={"last_read_message": msg},
+            )
+        elif is_main_user(request.user):
+            KidsMessageReadState.objects.update_or_create(
+                conversation=conv,
+                user=request.user,
+                defaults={"last_read_message": msg},
+            )
+        _send_message_notifications(msg)
+        return Response(KidsMessageSerializer(msg, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+
+def _announcement_query_for_user(u):
+    now = timezone.now()
+    qs = KidsAnnouncement.objects.filter(
+        is_published=True,
+    ).filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
+    if is_kids_student_user(u):
+        class_ids = KidsEnrollment.objects.filter(student=u).values_list("kids_class_id", flat=True)
+        return qs.filter(
+            Q(target_role=KidsAnnouncement.TargetRole.ALL)
+            | Q(target_role=KidsAnnouncement.TargetRole.STUDENT)
+        ).filter(Q(scope=KidsAnnouncement.Scope.CLASS, kids_class_id__in=class_ids))
+    if not is_main_user(u):
+        return qs.none()
+    if is_kids_admin_user(u):
+        return qs
+    if is_kids_parent_user(u):
+        class_ids = KidsEnrollment.objects.filter(student__parent_account=u).values_list("kids_class_id", flat=True)
+        school_ids = KidsClass.objects.filter(id__in=class_ids).values_list("school_id", flat=True)
+        return qs.filter(
+            Q(target_role=KidsAnnouncement.TargetRole.ALL)
+            | Q(target_role=KidsAnnouncement.TargetRole.PARENT)
+        ).filter(
+            Q(scope=KidsAnnouncement.Scope.CLASS, kids_class_id__in=class_ids)
+            | Q(scope=KidsAnnouncement.Scope.SCHOOL, school_id__in=school_ids)
+        )
+    # teacher
+    class_ids = KidsClass.objects.filter(teacher=u).values_list("id", flat=True)
+    school_ids = KidsClass.objects.filter(teacher=u).values_list("school_id", flat=True)
+    return qs.filter(
+        Q(target_role=KidsAnnouncement.TargetRole.ALL)
+        | Q(target_role=KidsAnnouncement.TargetRole.TEACHER)
+    ).filter(
+        Q(scope=KidsAnnouncement.Scope.CLASS, kids_class_id__in=class_ids)
+        | Q(scope=KidsAnnouncement.Scope.SCHOOL, school_id__in=school_ids)
+    )
+
+
+def _notify_announcement_targets(announcement: KidsAnnouncement, sender):
+    target = announcement.target_role
+    if announcement.scope == KidsAnnouncement.Scope.CLASS and announcement.kids_class_id:
+        class_ids = [announcement.kids_class_id]
+    elif announcement.scope == KidsAnnouncement.Scope.SCHOOL and announcement.school_id:
+        class_ids = list(
+            KidsClass.objects.filter(school_id=announcement.school_id).values_list("id", flat=True)
+        )
+    else:
+        class_ids = []
+    if not class_ids:
+        return
+    student_ids = KidsEnrollment.objects.filter(kids_class_id__in=class_ids).values_list("student_id", flat=True)
+    students = KidsUser.objects.filter(id__in=student_ids).distinct()
+    if target in (KidsAnnouncement.TargetRole.ALL, KidsAnnouncement.TargetRole.STUDENT):
+        for s in students:
+            create_kids_notification(
+                recipient_student=s,
+                sender_user=sender if is_main_user(sender) else None,
+                notification_type=KidsNotification.NotificationType.NEW_ANNOUNCEMENT,
+                message=f"Yeni duyuru: {announcement.title}",
+                announcement=announcement,
+            )
+    if target in (KidsAnnouncement.TargetRole.ALL, KidsAnnouncement.TargetRole.PARENT):
+        parents = MainUser.objects.filter(kids_children_accounts__in=students).distinct()
+        for p in parents:
+            create_kids_notification(
+                recipient_user=p,
+                sender_user=sender if is_main_user(sender) else None,
+                notification_type=KidsNotification.NotificationType.NEW_ANNOUNCEMENT,
+                message=f"Yeni duyuru: {announcement.title}",
+                announcement=announcement,
+            )
+    if target in (KidsAnnouncement.TargetRole.ALL, KidsAnnouncement.TargetRole.TEACHER):
+        teachers = MainUser.objects.filter(kids_classes__id__in=class_ids).distinct()
+        for t in teachers:
+            create_kids_notification(
+                recipient_user=t,
+                sender_user=sender if is_main_user(sender) else None,
+                notification_type=KidsNotification.NotificationType.NEW_ANNOUNCEMENT,
+                message=f"Yeni duyuru: {announcement.title}",
+                announcement=announcement,
+            )
+
+
+class KidsAnnouncementListCreateView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = _announcement_query_for_user(request.user).select_related("kids_class", "school", "created_by")
+        return Response(KidsAnnouncementSerializer(qs, many=True, context={"request": request}).data)
+
+    def post(self, request):
+        if not is_main_user(request.user) or not is_kids_teacher_or_admin_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        ser = KidsAnnouncementSerializer(data=request.data, context={"request": request})
+        ser.is_valid(raise_exception=True)
+        ann = ser.save(created_by=request.user)
+        if ann.is_published and ann.published_at is None:
+            ann.published_at = timezone.now()
+            ann.save(update_fields=["published_at", "updated_at"])
+            _notify_announcement_targets(ann, request.user)
+        return Response(KidsAnnouncementSerializer(ann).data, status=status.HTTP_201_CREATED)
+
+
+class KidsAnnouncementDetailView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        ann = KidsAnnouncement.objects.filter(pk=pk).first()
+        if not ann:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        if not is_main_user(request.user) or not is_kids_teacher_or_admin_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        was_published = bool(ann.is_published and ann.published_at)
+        ser = KidsAnnouncementSerializer(ann, data=request.data, partial=True, context={"request": request})
+        ser.is_valid(raise_exception=True)
+        ann = ser.save()
+        if ann.is_published and ann.published_at is None:
+            ann.published_at = timezone.now()
+            ann.save(update_fields=["published_at", "updated_at"])
+        if ann.is_published and not was_published:
+            _notify_announcement_targets(ann, request.user)
+        return Response(KidsAnnouncementSerializer(ann).data)
+
+
 class KidsNotificationListView(KidsAuthenticatedMixin, generics.ListAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = KidsNotificationSerializer
@@ -2689,6 +3048,9 @@ class KidsNotificationListView(KidsAuthenticatedMixin, generics.ListAPIView):
                 "submission",
                 "challenge",
                 "challenge_invite",
+                "conversation",
+                "message_record",
+                "announcement",
                 "sender_student",
                 "sender_user",
             )

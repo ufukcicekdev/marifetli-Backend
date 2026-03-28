@@ -9,17 +9,21 @@ from .auth_utils import is_kids_teacher_or_admin_user, is_main_user
 from .school_access import schools_queryset_for_main_user
 from .class_names import normalize_kids_class_name
 from .models import (
+    KidsAnnouncement,
     KidsAssignment,
     KidsChallenge,
     KidsChallengeInvite,
     KidsChallengeMember,
     KidsClass,
+    KidsConversation,
     KidsEnrollment,
     KidsFreestylePost,
     KidsGame,
     KidsGameProgress,
     KidsGameSession,
     KidsInvite,
+    KidsMessage,
+    KidsMessageReadState,
     KidsNotification,
     KidsParentGamePolicy,
     KidsSchool,
@@ -557,7 +561,6 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     {"submission_closes_at": "Son teslim gelecekte olmalıdır."}
                 )
-
         if (
             self.instance is not None
             and self.context.get("assignment_edit_planned", True)
@@ -864,8 +867,102 @@ class KidsNotificationSerializer(serializers.ModelSerializer):
             submission=obj.submission,
             challenge=obj.challenge,
             challenge_invite=obj.challenge_invite,
+            conversation=obj.conversation,
+            announcement=obj.announcement,
         )
 
+
+class KidsConversationSerializer(serializers.ModelSerializer):
+    unread_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = KidsConversation
+        fields = (
+            "id",
+            "kids_class",
+            "student",
+            "parent_user",
+            "teacher_user",
+            "topic",
+            "last_message_at",
+            "created_at",
+            "updated_at",
+            "unread_count",
+        )
+        read_only_fields = ("created_at", "updated_at", "last_message_at")
+
+    def get_unread_count(self, obj):
+        request = self.context.get("request")
+        user = getattr(request, "user", None) if request else None
+        if not user or not getattr(user, "is_authenticated", False):
+            return 0
+        is_kids_student = isinstance(user, KidsUser)
+        if is_kids_student:
+            state = KidsMessageReadState.objects.filter(conversation=obj, student=user).first()
+        else:
+            state = KidsMessageReadState.objects.filter(conversation=obj, user=user).first()
+        qs = obj.messages.all()
+        if state and state.last_read_message_id:
+            qs = qs.filter(id__gt=state.last_read_message_id)
+        if is_kids_student:
+            return qs.exclude(sender_student=user).count()
+        return qs.exclude(sender_user=user).count()
+
+
+class KidsMessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = KidsMessage
+        fields = (
+            "id",
+            "conversation",
+            "sender_student",
+            "sender_user",
+            "body",
+            "edited_at",
+            "created_at",
+        )
+        read_only_fields = ("sender_student", "sender_user", "edited_at", "created_at")
+
+
+class KidsAnnouncementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = KidsAnnouncement
+        fields = (
+            "id",
+            "scope",
+            "kids_class",
+            "school",
+            "target_role",
+            "title",
+            "body",
+            "is_pinned",
+            "is_published",
+            "published_at",
+            "expires_at",
+            "created_by",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("created_by", "published_at", "created_at", "updated_at")
+
+    def validate(self, attrs):
+        scope = attrs.get("scope")
+        if scope is None and self.instance is not None:
+            scope = self.instance.scope
+        kids_class = attrs.get("kids_class")
+        school = attrs.get("school")
+        if kids_class is None and self.instance is not None:
+            kids_class = self.instance.kids_class
+        if school is None and self.instance is not None:
+            school = self.instance.school
+        if scope == KidsAnnouncement.Scope.CLASS and not kids_class:
+            raise serializers.ValidationError({"kids_class": "Sınıf kapsamı için sınıf zorunludur."})
+        if scope == KidsAnnouncement.Scope.SCHOOL and not school:
+            raise serializers.ValidationError({"school": "Okul kapsamı için okul zorunludur."})
+        expires_at = attrs.get("expires_at")
+        if expires_at and expires_at <= timezone.now():
+            raise serializers.ValidationError({"expires_at": "Bitiş tarihi gelecekte olmalıdır."})
+        return attrs
 
 class KidsChallengeMemberReadSerializer(serializers.ModelSerializer):
     student = KidsUserSerializer(read_only=True)

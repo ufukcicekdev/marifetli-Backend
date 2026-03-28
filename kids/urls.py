@@ -102,6 +102,14 @@ urlpatterns = [
         views.KidsStudentSubmissionForAssignmentView.as_view(),
     ),
     path("student/badges/roadmap/", views.KidsStudentRoadmapView.as_view()),
+    path("messages/", views.KidsConversationListCreateView.as_view()),
+    path("messages/<int:pk>/", views.KidsConversationDetailView.as_view()),
+    path(
+        "messages/<int:conversation_id>/items/",
+        views.KidsConversationMessageListCreateView.as_view(),
+    ),
+    path("announcements/", views.KidsAnnouncementListCreateView.as_view()),
+    path("announcements/<int:pk>/", views.KidsAnnouncementDetailView.as_view()),
     path(
         "student/upload-submission-image/",
         views.KidsStudentSubmissionImageUploadView.as_view(),

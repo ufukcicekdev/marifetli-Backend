@@ -38,6 +38,7 @@ if "healthcheck.railway.app" not in ALLOWED_HOSTS:
 
 INSTALLED_APPS = [
     "jazzmin",
+    "daphne",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -47,6 +48,7 @@ INSTALLED_APPS = [
     # Third-party apps
     "rest_framework",
     "rest_framework_simplejwt",
+    "channels",
     "corsheaders",
     "social_django",
     # Local apps
@@ -139,6 +141,7 @@ JAZZMIN_SETTINGS = {
 }
 
 WSGI_APPLICATION = "marifetli_project.wsgi.application"
+ASGI_APPLICATION = "marifetli_project.asgi.application"
 
 # Custom User Model
 AUTH_USER_MODEL = "users.User"
@@ -514,6 +517,20 @@ else:
         "default": {
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
             "LOCATION": "marifetli-default",
+        }
+    }
+
+if REDIS_URL:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {"hosts": [REDIS_URL]},
+        }
+    }
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
         }
     }
 

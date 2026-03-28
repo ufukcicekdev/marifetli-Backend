@@ -293,6 +293,11 @@ class VideoDurationChoice(models.IntegerChoices):
 
 
 class KidsAssignment(models.Model):
+    class RecurrenceType(models.TextChoices):
+        NONE = "none", "Tek sefer"
+        DAILY = "daily", "Günlük"
+        WEEKLY = "weekly", "Haftalık"
+
     kids_class = models.ForeignKey(
         KidsClass,
         on_delete=models.CASCADE,
@@ -328,12 +333,54 @@ class KidsAssignment(models.Model):
         blank=True,
         help_text="Yeni projelerde zorunlu; boş eski kayıtlar süre kısıtı olmadan kabul edilir.",
     )
+    recurrence_type = models.CharField(
+        max_length=16,
+        choices=RecurrenceType.choices,
+        default=RecurrenceType.NONE,
+        db_index=True,
+    )
+    recurrence_interval = models.PositiveSmallIntegerField(
+        "tekrar aralığı",
+        default=1,
+        help_text="Günlük/haftalık tekrar için aralık değeri (örn. 2=2 günde/haftada bir).",
+    )
+    recurrence_until = models.DateTimeField(
+        "tekrar bitiş",
+        null=True,
+        blank=True,
+        help_text="Boşsa tekrar açık uçlu kabul edilir.",
+    )
+    allow_late_submissions = models.BooleanField(
+        "geç teslime izin",
+        default=False,
+    )
+    late_grace_hours = models.PositiveSmallIntegerField(
+        "geç teslim tolerans saati",
+        default=0,
+        help_text="Son teslimden sonra geç teslim için tolerans süresi.",
+    )
+    late_penalty_percent = models.PositiveSmallIntegerField(
+        "geç teslim ceza yüzdesi",
+        default=0,
+        help_text="Rubrik toplam skorunda geç teslim cezası (0-100).",
+    )
+    rubric_schema = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Rubrik kriterleri listesi: [{id,label,max_points,weight?}]",
+    )
     is_published = models.BooleanField(default=True)
     students_notified_at = models.DateTimeField(
         "öğrencilere bildirim (panel)",
         null=True,
         blank=True,
         help_text="Yeni proje bildirimi gönderildiği an. Gelecek teslim başlangıcında boş kalır; süre gelince Celery doldurur.",
+    )
+    due_soon_notified_at = models.DateTimeField(
+        "son teslim yaklaşıyor bildirimi",
+        null=True,
+        blank=True,
+        help_text="Son teslim hatırlatması gönderildiğinde dolar.",
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -366,6 +413,26 @@ class KidsSubmission(models.Model):
     steps_payload = models.JSONField(null=True, blank=True)
     video_url = models.URLField(blank=True)
     caption = models.TextField(blank=True)
+    is_late_submission = models.BooleanField(
+        "geç teslim",
+        default=False,
+        db_index=True,
+    )
+    rubric_scores = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Öğretmen kriter bazlı puanları: [{criterion_id, points, note?}]",
+    )
+    rubric_total_score = models.FloatField(
+        "rubrik toplam puanı",
+        null=True,
+        blank=True,
+    )
+    rubric_feedback = models.TextField(
+        "rubrik geri bildirimi",
+        max_length=1200,
+        blank=True,
+    )
     teacher_review_valid = models.BooleanField(
         "öğretmen: teslim geçerli mi",
         null=True,
@@ -775,6 +842,170 @@ class KidsGameProgress(models.Model):
         ]
 
 
+class KidsConversation(models.Model):
+    """Veli-öğretmen mesajlaşma başlığı (öğrenci/sınıf bağlamında)."""
+
+    kids_class = models.ForeignKey(
+        KidsClass,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="conversations",
+    )
+    student = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        related_name="conversations",
+    )
+    parent_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="kids_parent_conversations",
+    )
+    teacher_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="kids_teacher_conversations",
+    )
+    topic = models.CharField(max_length=200, blank=True)
+    last_message_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_conversations"
+        ordering = ["-last_message_at", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["kids_class", "student", "parent_user", "teacher_user"],
+                name="kids_conversation_unique_participants",
+            ),
+        ]
+
+
+class KidsMessage(models.Model):
+    conversation = models.ForeignKey(
+        KidsConversation,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+    sender_student = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="sent_kids_messages_student",
+    )
+    sender_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="sent_kids_messages_user",
+    )
+    body = models.TextField(max_length=4000)
+    edited_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        db_table = "kids_messages"
+        ordering = ["created_at", "id"]
+
+
+class KidsMessageReadState(models.Model):
+    conversation = models.ForeignKey(
+        KidsConversation,
+        on_delete=models.CASCADE,
+        related_name="read_states",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="kids_message_read_states",
+    )
+    student = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="kids_message_read_states",
+    )
+    last_read_message = models.ForeignKey(
+        KidsMessage,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    read_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_message_read_states"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["conversation", "user"],
+                name="kids_message_read_state_conversation_user_uniq",
+            ),
+            models.UniqueConstraint(
+                fields=["conversation", "student"],
+                name="kids_message_read_state_conversation_student_uniq",
+            ),
+        ]
+
+
+class KidsAnnouncement(models.Model):
+    class Scope(models.TextChoices):
+        CLASS = "class", "Sınıf"
+        SCHOOL = "school", "Okul"
+
+    class TargetRole(models.TextChoices):
+        ALL = "all", "Herkes"
+        PARENT = "parent", "Veli"
+        STUDENT = "student", "Öğrenci"
+        TEACHER = "teacher", "Öğretmen"
+
+    scope = models.CharField(max_length=16, choices=Scope.choices, default=Scope.CLASS, db_index=True)
+    kids_class = models.ForeignKey(
+        KidsClass,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="announcements",
+    )
+    school = models.ForeignKey(
+        KidsSchool,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="announcements",
+    )
+    target_role = models.CharField(
+        max_length=16,
+        choices=TargetRole.choices,
+        default=TargetRole.ALL,
+        db_index=True,
+    )
+    title = models.CharField(max_length=240)
+    body = models.TextField(max_length=5000)
+    is_pinned = models.BooleanField(default=False, db_index=True)
+    is_published = models.BooleanField(default=False, db_index=True)
+    published_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="kids_announcements_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_announcements"
+        ordering = ["-is_pinned", "-published_at", "-created_at"]
+
+
 class KidsNotification(models.Model):
     """Kids kullanıcıları için uygulama içi + (opsiyonel) push bildirim kaydı."""
 
@@ -786,6 +1017,11 @@ class KidsNotification(models.Model):
         CHALLENGE_REJECTED = "kids_challenge_rejected", "Yarışma reddedildi"
         CHALLENGE_INVITE = "kids_challenge_invite", "Yarışma daveti"
         CHALLENGE_PENDING_PARENT = "kids_challenge_pending_parent", "Serbest yarışma veli onayında"
+        NEW_MESSAGE = "kids_new_message", "Yeni mesaj"
+        NEW_ANNOUNCEMENT = "kids_new_announcement", "Yeni duyuru"
+        ASSIGNMENT_DUE_SOON = "kids_assignment_due_soon", "Son teslim yaklaşıyor"
+        ASSIGNMENT_LATE_SUBMITTED = "kids_assignment_late_submitted", "Geç teslim alındı"
+        ASSIGNMENT_GRADED_WITH_RUBRIC = "kids_assignment_graded_with_rubric", "Rubrik değerlendirmesi yayınlandı"
 
     recipient_student = models.ForeignKey(
         KidsUser,
@@ -840,6 +1076,27 @@ class KidsNotification(models.Model):
     )
     challenge_invite = models.ForeignKey(
         KidsChallengeInvite,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="kids_notifications",
+    )
+    conversation = models.ForeignKey(
+        KidsConversation,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="kids_notifications",
+    )
+    message_record = models.ForeignKey(
+        KidsMessage,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="kids_notifications",
+    )
+    announcement = models.ForeignKey(
+        KidsAnnouncement,
         on_delete=models.CASCADE,
         null=True,
         blank=True,

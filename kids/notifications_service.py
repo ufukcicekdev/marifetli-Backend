@@ -11,11 +11,14 @@ from django.contrib.auth import get_user_model
 from notifications.services import deliver_fcm_push_tokens
 
 from .models import (
+    KidsAnnouncement,
     KidsAssignment,
     KidsChallenge,
     KidsChallengeInvite,
+    KidsConversation,
     KidsEnrollment,
     KidsFCMDeviceToken,
+    KidsMessage,
     KidsNotification,
     KidsSubmission,
     KidsUser,
@@ -39,6 +42,8 @@ def kids_notification_relative_path(
     submission: KidsSubmission | None = None,
     challenge: KidsChallenge | None = None,
     challenge_invite: KidsChallengeInvite | None = None,
+    conversation: KidsConversation | None = None,
+    announcement: KidsAnnouncement | None = None,
 ) -> str:
     """Next.js: `${pathPrefix}${action_path}` (örn. action_path=/ogrenci/proje/3)."""
     if notification_type == KidsNotification.NotificationType.NEW_ASSIGNMENT and assignment:
@@ -63,6 +68,17 @@ def kids_notification_relative_path(
         return _kids_app_path("bildirimler")
     if notification_type == KidsNotification.NotificationType.CHALLENGE_PENDING_PARENT:
         return _kids_app_path("veli", "yarismalar")
+    if notification_type == KidsNotification.NotificationType.NEW_MESSAGE and conversation:
+        return _kids_app_path("mesajlar", str(conversation.pk))
+    if notification_type == KidsNotification.NotificationType.NEW_ANNOUNCEMENT:
+        return _kids_app_path("duyurular")
+    if notification_type == KidsNotification.NotificationType.ASSIGNMENT_DUE_SOON and assignment:
+        return _kids_app_path("ogrenci", "proje", str(assignment.pk))
+    if notification_type == KidsNotification.NotificationType.ASSIGNMENT_LATE_SUBMITTED and submission:
+        cid = submission.assignment.kids_class_id
+        return _kids_app_path("ogretmen", "sinif", str(cid))
+    if notification_type == KidsNotification.NotificationType.ASSIGNMENT_GRADED_WITH_RUBRIC and assignment:
+        return _kids_app_path("ogrenci", "proje", str(assignment.pk))
     return _kids_app_path("bildirimler")
 
 
@@ -73,6 +89,8 @@ def kids_notification_absolute_url(
     submission: KidsSubmission | None = None,
     challenge: KidsChallenge | None = None,
     challenge_invite: KidsChallengeInvite | None = None,
+    conversation: KidsConversation | None = None,
+    announcement: KidsAnnouncement | None = None,
 ) -> str:
     """Push tıklama: sunucunun bildiği tam Kids kökü + isteğe bağlı URL öneki."""
     base = (getattr(settings, "KIDS_FRONTEND_URL", None) or "").strip().rstrip("/")
@@ -82,6 +100,8 @@ def kids_notification_absolute_url(
         submission=submission,
         challenge=challenge,
         challenge_invite=challenge_invite,
+        conversation=conversation,
+        announcement=announcement,
     )
     prefix = (getattr(settings, "KIDS_FRONTEND_PATH_PREFIX", None) or "").strip().strip("/")
     if prefix:
@@ -123,6 +143,9 @@ def create_kids_notification(
     submission: KidsSubmission | None = None,
     challenge: KidsChallenge | None = None,
     challenge_invite: KidsChallengeInvite | None = None,
+    conversation: KidsConversation | None = None,
+    message_record: KidsMessage | None = None,
+    announcement: KidsAnnouncement | None = None,
 ) -> KidsNotification | None:
     if recipient_student is None and recipient_user is None:
         return None
@@ -145,6 +168,9 @@ def create_kids_notification(
         submission=submission,
         challenge=challenge,
         challenge_invite=challenge_invite,
+        conversation=conversation,
+        message_record=message_record,
+        announcement=announcement,
     )
     tokens = _fcm_tokens_for_recipient(
         recipient_student=recipient_student,
@@ -157,6 +183,8 @@ def create_kids_notification(
             submission=submission,
             challenge=challenge,
             challenge_invite=challenge_invite,
+                conversation=conversation,
+                announcement=announcement,
         )
         try:
             deliver_fcm_push_tokens(
