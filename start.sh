@@ -16,6 +16,6 @@ if [ "$ROLE" = "1" ]; then
 else
   echo "[start.sh] Running migrate..."
   python manage.py migrate --noinput
-  echo "[start.sh] Migrate OK, starting gunicorn (healthcheck will hit /)..."
-  exec gunicorn marifetli_project.wsgi:application --bind "0.0.0.0:$PORT" --workers 3 --timeout 120
+  echo "[start.sh] Migrate OK, starting daphne ASGI (HTTP + WebSocket)..."
+  exec daphne -b 0.0.0.0 -p "$PORT" marifetli_project.asgi:application
 fi
