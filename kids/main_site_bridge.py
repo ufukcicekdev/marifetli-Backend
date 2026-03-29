@@ -41,6 +41,7 @@ def provision_kids_parent_user(
                 "Bu e-posta Marifetli ana sitede kayıtlı; şifre eşleşmiyor veya eksik."
             )
         existing.kids_portal_role = KidsPortalRole.PARENT
+        existing.is_verified = True
         if first_name:
             existing.first_name = first_name[:150]
         if last_name:
@@ -48,6 +49,7 @@ def provision_kids_parent_user(
         existing.save(
             update_fields=[
                 "kids_portal_role",
+                "is_verified",
                 "first_name",
                 "last_name",
                 "updated_at",
@@ -63,5 +65,6 @@ def provision_kids_parent_user(
         password=raw_password,
         first_name=(first_name or "")[:150],
         last_name=(last_name or "")[:150],
+        is_verified=True,
         kids_portal_role=KidsPortalRole.PARENT,
     )

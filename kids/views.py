@@ -686,10 +686,11 @@ def _accept_invite_family(request, invite: KidsInvite, data: dict) -> Response:
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             existing_main.kids_portal_role = KidsPortalRole.PARENT
+            existing_main.is_verified = True
             existing_main.first_name = data["parent_first_name"].strip()[:150]
             existing_main.last_name = data["parent_last_name"].strip()[:150]
             existing_main.save(
-                update_fields=["kids_portal_role", "first_name", "last_name", "updated_at"]
+                update_fields=["kids_portal_role", "is_verified", "first_name", "last_name", "updated_at"]
             )
             parent = existing_main
         else:
@@ -1447,6 +1448,7 @@ class KidsAdminTeacherListCreateView(KidsAuthenticatedMixin, APIView):
                 password=temp_password,
                 first_name=first_name[:150],
                 last_name=last_name[:150],
+                is_verified=True,
                 kids_portal_role=KidsPortalRole.TEACHER,
             )
             KidsTeacherBranch.objects.update_or_create(
@@ -2068,7 +2070,12 @@ class KidsClassDetailView(KidsAuthenticatedMixin, APIView):
         obj = self.get_object(request, pk)
         if not obj:
             return Response(status=status.HTTP_404_NOT_FOUND)
-        ser = KidsClassSerializer(obj, data=request.data, partial=True, context={"request": request})
+        data = request.data.copy()
+        # Öğretmen sınıf kimliğini (ad + eğitim yılı) yönetimden değiştiremez.
+        if not is_kids_admin_user(request.user):
+            data.pop("name", None)
+            data.pop("academic_year_label", None)
+        ser = KidsClassSerializer(obj, data=data, partial=True, context={"request": request})
         ser.is_valid(raise_exception=True)
         ser.save()
         obj = self.get_object(request, pk)
