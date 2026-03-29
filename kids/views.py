@@ -5,6 +5,7 @@ import unicodedata
 import uuid
 from datetime import timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.core.files.storage import default_storage
@@ -692,7 +693,7 @@ def _student_grade_level(student: KidsUser) -> int:
 
 
 def _minutes_played_today(student: KidsUser) -> int:
-    now = timezone.localtime()
+    now = _kids_parental_local_now()
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     end = start + timedelta(days=1)
     rows = KidsGameSession.objects.filter(
@@ -715,6 +716,18 @@ def _is_now_in_allowed_window(now_local, start_t, end_t) -> bool:
     return cur >= start_t or cur <= end_t
 
 
+def _kids_parental_timezone():
+    tz_name = getattr(settings, "KIDS_PARENTAL_TIME_ZONE", "Europe/Istanbul")
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        return timezone.get_current_timezone()
+
+
+def _kids_parental_local_now():
+    return timezone.now().astimezone(_kids_parental_timezone())
+
+
 def _game_policy_error(student: KidsUser, game: KidsGame) -> str | None:
     pol = getattr(student, "game_policy", None)
     if not pol:
@@ -722,7 +735,7 @@ def _game_policy_error(student: KidsUser, game: KidsGame) -> str | None:
     blocked = pol.blocked_game_ids or []
     if game.id in blocked:
         return "Bu oyun veli kontrolünde geçici olarak kapalı."
-    now_local = timezone.localtime()
+    now_local = _kids_parental_local_now()
     if not _is_now_in_allowed_window(now_local, pol.allowed_start_time, pol.allowed_end_time):
         return "Bu saatte oyun oynayamazsın. Veli saat aralığını kontrol et."
     played_min = _minutes_played_today(student)
