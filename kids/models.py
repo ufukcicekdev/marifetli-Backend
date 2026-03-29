@@ -225,6 +225,66 @@ class KidsClass(models.Model):
         return self.name
 
 
+class KidsClassTeacher(models.Model):
+    """Sınıf bazlı öğretmen ataması (çoklu öğretmen + branş)."""
+
+    kids_class = models.ForeignKey(
+        KidsClass,
+        on_delete=models.CASCADE,
+        related_name="teacher_assignments",
+    )
+    teacher = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="kids_class_assignments",
+    )
+    subject = models.CharField(max_length=80, default="Sınıf Öğretmeni")
+    is_active = models.BooleanField(default=True)
+    assigned_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "kids_class_teachers"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["kids_class", "teacher"],
+                name="kids_class_teacher_unique",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.kids_class_id}:{self.teacher_id}:{self.subject}"
+
+
+class KidsSubject(models.Model):
+    name = models.CharField(max_length=80, unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_subjects"
+        ordering = ["name", "id"]
+
+    def __str__(self):
+        return self.name
+
+
+class KidsTeacherBranch(models.Model):
+    teacher = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="kids_teacher_branch",
+    )
+    subject = models.CharField(max_length=80)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_teacher_branches"
+
+    def __str__(self):
+        return f"{self.teacher_id}:{self.subject}"
+
+
 class KidsEnrollment(models.Model):
     kids_class = models.ForeignKey(
         KidsClass,
@@ -395,6 +455,11 @@ class KidsSubmission(models.Model):
         STEPS = "steps", "Adım adım"
         VIDEO = "video", "Video"
 
+    class ParentReviewStatus(models.TextChoices):
+        PENDING = "pending", "Veli onayı bekliyor"
+        APPROVED = "approved", "Veli onayladı"
+        REJECTED = "rejected", "Veli eksik dedi"
+
     assignment = models.ForeignKey(
         KidsAssignment,
         on_delete=models.CASCADE,
@@ -413,6 +478,34 @@ class KidsSubmission(models.Model):
     steps_payload = models.JSONField(null=True, blank=True)
     video_url = models.URLField(blank=True)
     caption = models.TextField(blank=True)
+    student_marked_done_at = models.DateTimeField(
+        "ogrenci tamamlandi isareti",
+        null=True,
+        blank=True,
+    )
+    parent_review_status = models.CharField(
+        max_length=16,
+        choices=ParentReviewStatus.choices,
+        default=ParentReviewStatus.PENDING,
+        db_index=True,
+    )
+    parent_reviewed_at = models.DateTimeField(
+        "veli kontrol zamani",
+        null=True,
+        blank=True,
+    )
+    parent_note_to_teacher = models.TextField(
+        "veli notu",
+        max_length=600,
+        blank=True,
+    )
+    parent_reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="kids_parent_reviewed_submissions",
+    )
     is_late_submission = models.BooleanField(
         "geç teslim",
         default=False,
@@ -480,6 +573,108 @@ class KidsSubmission(models.Model):
             models.UniqueConstraint(
                 fields=("assignment", "student", "round_number"),
                 name="kids_submission_assignment_student_round_uniq",
+            ),
+        ]
+
+
+class KidsHomework(models.Model):
+    kids_class = models.ForeignKey(
+        KidsClass,
+        on_delete=models.CASCADE,
+        related_name="homeworks",
+    )
+    title = models.CharField(max_length=300)
+    description = models.TextField(blank=True)
+    page_start = models.PositiveSmallIntegerField(null=True, blank=True)
+    page_end = models.PositiveSmallIntegerField(null=True, blank=True)
+    due_at = models.DateTimeField(null=True, blank=True)
+    is_published = models.BooleanField(default=True, db_index=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="kids_homeworks_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_homeworks"
+        ordering = ["-created_at"]
+
+
+class KidsHomeworkAttachment(models.Model):
+    homework = models.ForeignKey(
+        KidsHomework,
+        on_delete=models.CASCADE,
+        related_name="attachments",
+    )
+    file = models.FileField(upload_to="kids_homeworks/")
+    original_name = models.CharField(max_length=255, blank=True)
+    content_type = models.CharField(max_length=120, blank=True)
+    size_bytes = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "kids_homework_attachments"
+        ordering = ["created_at", "id"]
+
+
+class KidsHomeworkSubmission(models.Model):
+    class Status(models.TextChoices):
+        PUBLISHED = "published", "Yayında"
+        STUDENT_DONE = "student_done", "Öğrenci tamamladı"
+        PARENT_APPROVED = "parent_approved", "Veli onayladı"
+        PARENT_REJECTED = "parent_rejected", "Veli eksik dedi"
+        TEACHER_APPROVED = "teacher_approved", "Öğretmen onayladı"
+        TEACHER_REVISION = "teacher_revision", "Öğretmen düzeltme istedi"
+
+    homework = models.ForeignKey(
+        KidsHomework,
+        on_delete=models.CASCADE,
+        related_name="submissions",
+    )
+    student = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        related_name="kids_homework_submissions",
+        limit_choices_to={"role": KidsUserRole.STUDENT},
+    )
+    status = models.CharField(
+        max_length=24,
+        choices=Status.choices,
+        default=Status.PUBLISHED,
+        db_index=True,
+    )
+    student_done_at = models.DateTimeField(null=True, blank=True)
+    student_note = models.TextField(max_length=600, blank=True)
+    parent_reviewed_at = models.DateTimeField(null=True, blank=True)
+    parent_note = models.TextField(max_length=600, blank=True)
+    parent_reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="kids_homework_parent_reviews",
+    )
+    teacher_reviewed_at = models.DateTimeField(null=True, blank=True)
+    teacher_note = models.TextField(max_length=600, blank=True)
+    teacher_reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="kids_homework_teacher_reviews",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_homework_submissions"
+        ordering = ["-updated_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("homework", "student"),
+                name="kids_homework_submission_homework_student_uniq",
             ),
         ]
 
@@ -1006,12 +1201,37 @@ class KidsAnnouncement(models.Model):
         ordering = ["-is_pinned", "-published_at", "-created_at"]
 
 
+class KidsAnnouncementAttachment(models.Model):
+    announcement = models.ForeignKey(
+        KidsAnnouncement,
+        on_delete=models.CASCADE,
+        related_name="attachments",
+    )
+    file = models.FileField(upload_to="kids_announcements/")
+    original_name = models.CharField(max_length=255, blank=True)
+    content_type = models.CharField(max_length=120, blank=True)
+    size_bytes = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "kids_announcement_attachments"
+        ordering = ["created_at", "id"]
+
+
 class KidsNotification(models.Model):
     """Kids kullanıcıları için uygulama içi + (opsiyonel) push bildirim kaydı."""
 
     class NotificationType(models.TextChoices):
         NEW_ASSIGNMENT = "kids_new_assignment", "Yeni proje"
         SUBMISSION_RECEIVED = "kids_submission_received", "Proje teslimi"
+        NEW_HOMEWORK = "kids_new_homework", "Yeni ödev"
+        NEW_HOMEWORK_PARENT = "kids_new_homework_parent", "Yeni ödev (veli)"
+        HOMEWORK_PARENT_REVIEW_REQUIRED = "kids_homework_parent_review_required", "Ödev veli onayı bekliyor"
+        HOMEWORK_PARENT_APPROVED_FOR_TEACHER = (
+            "kids_homework_parent_approved_for_teacher",
+            "Ödev veli onayı öğretmene iletildi",
+        )
+        HOMEWORK_TEACHER_REVIEWED = "kids_homework_teacher_reviewed", "Ödev öğretmen değerlendirmesi"
         CHALLENGE_PENDING_TEACHER = "kids_challenge_pending_teacher", "Yarışma öğretmen onayında"
         CHALLENGE_APPROVED = "kids_challenge_approved", "Yarışma onaylandı"
         CHALLENGE_REJECTED = "kids_challenge_rejected", "Yarışma reddedildi"
@@ -1051,7 +1271,7 @@ class KidsNotification(models.Model):
         blank=True,
         related_name="sent_kids_notifications_user",
     )
-    notification_type = models.CharField(max_length=40, choices=NotificationType.choices)
+    notification_type = models.CharField(max_length=64, choices=NotificationType.choices)
     message = models.TextField()
     assignment = models.ForeignKey(
         KidsAssignment,

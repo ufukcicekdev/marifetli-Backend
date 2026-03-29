@@ -10,17 +10,22 @@ from .school_access import schools_queryset_for_main_user
 from .class_names import normalize_kids_class_name
 from .models import (
     KidsAnnouncement,
+    KidsAnnouncementAttachment,
     KidsAssignment,
     KidsChallenge,
     KidsChallengeInvite,
     KidsChallengeMember,
     KidsClass,
+    KidsClassTeacher,
     KidsConversation,
     KidsEnrollment,
     KidsFreestylePost,
     KidsGame,
     KidsGameProgress,
     KidsGameSession,
+    KidsHomework,
+    KidsHomeworkAttachment,
+    KidsHomeworkSubmission,
     KidsInvite,
     KidsMessage,
     KidsMessageReadState,
@@ -30,6 +35,8 @@ from .models import (
     KidsSchoolTeacher,
     KidsSchoolYearProfile,
     KidsSubmission,
+    KidsSubject,
+    KidsTeacherBranch,
     KidsUser,
     KidsUserRole,
     VideoDurationChoice,
@@ -111,6 +118,55 @@ def _absolute_media_url(request, relative_or_absolute: str) -> str:
     return relative_or_absolute
 
 
+def _homework_attachment_payloads(request, homework: KidsHomework):
+    attachments = getattr(homework, "attachments", None)
+    if attachments is not None and hasattr(attachments, "all"):
+        rows = attachments.all()
+    else:
+        rows = KidsHomeworkAttachment.objects.filter(homework=homework).order_by("created_at", "id")
+    return [
+        {
+            "id": a.id,
+            "url": _absolute_media_url(request, a.file.url) if getattr(a, "file", None) else "",
+            "original_name": a.original_name,
+            "content_type": a.content_type,
+            "size_bytes": a.size_bytes,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in rows
+    ]
+
+
+def _teacher_display_and_subject_from_class(kids_class: KidsClass) -> tuple[str, str]:
+    teacher = getattr(kids_class, "teacher", None)
+    if not teacher:
+        return "", ""
+    teacher_display = (
+        f"{(teacher.first_name or '').strip()} {(teacher.last_name or '').strip()}".strip()
+        or (teacher.email or "")
+    )
+    subject = ""
+    assignments = getattr(kids_class, "teacher_assignments", None)
+    if assignments is not None and hasattr(assignments, "all"):
+        primary_row = next(
+            (
+                row
+                for row in assignments.all()
+                if getattr(row, "is_active", False) and getattr(row, "teacher_id", None) == teacher.id
+            ),
+            None,
+        )
+        if primary_row:
+            subject = (primary_row.subject or "").strip()
+    if not subject:
+        subject = (
+            KidsTeacherBranch.objects.filter(teacher_id=teacher.id).values_list("subject", flat=True).first() or ""
+        ).strip()
+    if not subject:
+        subject = "Sınıf Öğretmeni"
+    return teacher_display, subject
+
+
 class KidsUserSerializer(serializers.ModelSerializer):
     profile_picture = serializers.SerializerMethodField()
     growth_stage = serializers.SerializerMethodField()
@@ -171,6 +227,23 @@ class KidsUserProfileUpdateSerializer(serializers.ModelSerializer):
 
 
 class KidsSchoolSerializer(serializers.ModelSerializer):
+    default_academic_year_label = serializers.SerializerMethodField()
+
+    def get_default_academic_year_label(self, obj):
+        profiles_manager = getattr(obj, "year_profiles", None)
+        if profiles_manager is not None and hasattr(profiles_manager, "all"):
+            years = [str(p.academic_year or "").strip() for p in profiles_manager.all()]
+        else:
+            years = list(
+                KidsSchoolYearProfile.objects.filter(school=obj)
+                .values_list("academic_year", flat=True)
+            )
+            years = [str(y or "").strip() for y in years]
+        years = [y for y in years if y]
+        if not years:
+            return ""
+        return sorted(years)[-1]
+
     class Meta:
         model = KidsSchool
         fields = (
@@ -183,6 +256,7 @@ class KidsSchoolSerializer(serializers.ModelSerializer):
             "demo_start_at",
             "demo_end_at",
             "student_user_cap",
+            "default_academic_year_label",
             "created_at",
             "updated_at",
         )
@@ -316,6 +390,7 @@ class KidsAdminSchoolCreateSerializer(serializers.Serializer):
 
 class KidsClassSerializer(serializers.ModelSerializer):
     teacher_email = serializers.EmailField(source="teacher.email", read_only=True)
+    teachers = serializers.SerializerMethodField()
     school = KidsSchoolSerializer(read_only=True)
     school_id = serializers.PrimaryKeyRelatedField(
         queryset=KidsSchool.objects.none(),
@@ -336,6 +411,7 @@ class KidsClassSerializer(serializers.ModelSerializer):
             "school_id",
             "teacher",
             "teacher_email",
+            "teachers",
             "created_at",
             "updated_at",
         )
@@ -381,7 +457,110 @@ class KidsClassSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"school_id": "Sınıfın mutlaka bir okula bağlı kalması gerekir."}
             )
+
+        school = attrs.get("school") if "school" in attrs else getattr(self.instance, "school", None)
+        name = attrs.get("name") if "name" in attrs else getattr(self.instance, "name", "")
+        academic_year_label = (
+            attrs.get("academic_year_label")
+            if "academic_year_label" in attrs
+            else getattr(self.instance, "academic_year_label", "")
+        )
+        if school and name:
+            dup_qs = KidsClass.objects.filter(
+                school=school,
+                academic_year_label=academic_year_label or "",
+                name__iexact=name,
+            )
+            if self.instance is not None:
+                dup_qs = dup_qs.exclude(pk=self.instance.pk)
+            if dup_qs.exists():
+                raise serializers.ValidationError(
+                    {
+                        "name": (
+                            "Bu okulda aynı sınıf adı bu eğitim-öğretim yılı için zaten var. "
+                            "Yeni sınıf açmak yerine mevcut sınıfa öğretmen ataması yapın."
+                        )
+                    }
+                )
         return attrs
+
+    def get_teachers(self, obj):
+        out = []
+        assignments = getattr(obj, "teacher_assignments", None)
+        if assignments is not None and hasattr(assignments, "all"):
+            rows = assignments.all()
+        else:
+            rows = (
+                KidsClassTeacher.objects.filter(kids_class=obj, is_active=True)
+                .select_related("teacher")
+                .order_by("assigned_at")
+            )
+        for row in rows:
+            t = row.teacher
+            display = (f"{(t.first_name or '').strip()} {(t.last_name or '').strip()}".strip() or t.email)
+            out.append(
+                {
+                    "teacher_user_id": t.id,
+                    "teacher_display": display,
+                    "subject": row.subject or "",
+                    "is_primary": obj.teacher_id == t.id,
+                }
+            )
+        if not out and obj.teacher_id:
+            t = obj.teacher
+            display = (f"{(t.first_name or '').strip()} {(t.last_name or '').strip()}".strip() or t.email)
+            out.append(
+                {
+                    "teacher_user_id": t.id,
+                    "teacher_display": display,
+                    "subject": "Sınıf Öğretmeni",
+                    "is_primary": True,
+                }
+            )
+        return out
+
+
+class KidsClassTeacherSerializer(serializers.ModelSerializer):
+    teacher_user_id = serializers.IntegerField(source="teacher_id")
+    teacher_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = KidsClassTeacher
+        fields = (
+            "teacher_user_id",
+            "teacher_display",
+            "subject",
+            "is_active",
+            "assigned_at",
+        )
+        read_only_fields = ("teacher_user_id", "teacher_display", "assigned_at")
+
+    def get_teacher_display(self, obj):
+        t = obj.teacher
+        return (f"{(t.first_name or '').strip()} {(t.last_name or '').strip()}".strip() or t.email)
+
+
+class KidsClassTeacherWriteSerializer(serializers.Serializer):
+    teacher_user_id = serializers.IntegerField(min_value=1)
+    subject = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    is_active = serializers.BooleanField(required=False, default=True)
+
+
+class KidsSubjectSerializer(serializers.ModelSerializer):
+    usage_count = serializers.SerializerMethodField()
+
+    def get_usage_count(self, obj):
+        return int(getattr(obj, "usage_count", 0) or 0)
+
+    class Meta:
+        model = KidsSubject
+        fields = ("id", "name", "is_active", "usage_count", "created_at", "updated_at")
+        read_only_fields = ("id", "created_at", "updated_at")
+
+
+class KidsSubjectWriteSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=80, required=True)
+    is_active = serializers.BooleanField(required=False, default=True)
 
 
 class KidsInviteCreateSerializer(serializers.Serializer):
@@ -503,6 +682,9 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
     enrolled_student_count = serializers.SerializerMethodField()
     my_submission = serializers.SerializerMethodField()
     my_rounds_progress = serializers.SerializerMethodField()
+    class_name = serializers.SerializerMethodField()
+    teacher_display = serializers.SerializerMethodField()
+    teacher_subject = serializers.SerializerMethodField()
 
     class Meta:
         model = KidsAssignment
@@ -526,6 +708,9 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
             "enrolled_student_count",
             "my_submission",
             "my_rounds_progress",
+            "class_name",
+            "teacher_display",
+            "teacher_subject",
         )
         read_only_fields = ("created_at", "updated_at", "students_notified_at")
 
@@ -631,6 +816,24 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
             "total": int(obj.submission_rounds or 1),
         }
 
+    def get_class_name(self, obj):
+        kc = getattr(obj, "kids_class", None)
+        return kc.name if kc else ""
+
+    def get_teacher_display(self, obj):
+        kc = getattr(obj, "kids_class", None)
+        if not kc:
+            return ""
+        display, _subject = _teacher_display_and_subject_from_class(kc)
+        return display
+
+    def get_teacher_subject(self, obj):
+        kc = getattr(obj, "kids_class", None)
+        if not kc:
+            return ""
+        _display, subject = _teacher_display_and_subject_from_class(kc)
+        return subject
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
         if self.context.get("for_student"):
@@ -656,6 +859,148 @@ class KidsAssignmentBriefSerializer(serializers.ModelSerializer):
     class Meta:
         model = KidsAssignment
         fields = ("id", "title")
+
+
+class KidsHomeworkSerializer(serializers.ModelSerializer):
+    attachments = serializers.SerializerMethodField()
+
+    class Meta:
+        model = KidsHomework
+        fields = (
+            "id",
+            "kids_class",
+            "title",
+            "description",
+            "page_start",
+            "page_end",
+            "due_at",
+            "is_published",
+            "attachments",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("created_at", "updated_at")
+
+    def get_attachments(self, obj):
+        return _homework_attachment_payloads(self.context.get("request"), obj)
+
+    def validate(self, attrs):
+        start = attrs.get("page_start")
+        end = attrs.get("page_end")
+        if self.instance is not None:
+            if start is None:
+                start = self.instance.page_start
+            if end is None:
+                end = self.instance.page_end
+        if start and end and end < start:
+            raise serializers.ValidationError({"page_end": "Sayfa bitişi başlangıçtan küçük olamaz."})
+        return attrs
+
+
+class KidsHomeworkSubmissionSerializer(serializers.ModelSerializer):
+    student = serializers.SerializerMethodField()
+    homework = serializers.SerializerMethodField()
+
+    class Meta:
+        model = KidsHomeworkSubmission
+        fields = (
+            "id",
+            "homework",
+            "student",
+            "status",
+            "student_done_at",
+            "student_note",
+            "parent_reviewed_at",
+            "parent_note",
+            "teacher_reviewed_at",
+            "teacher_note",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+    def get_student(self, obj):
+        s = obj.student
+        return {
+            "id": s.id,
+            "email": s.email,
+            "first_name": s.first_name,
+            "last_name": s.last_name,
+            "created_at": s.created_at.isoformat() if s.created_at else None,
+            "profile_picture": _absolute_media_url(
+                self.context.get("request"), s.profile_picture.url
+            )
+            if getattr(s, "profile_picture", None)
+            else None,
+        }
+
+    def get_homework(self, obj):
+        h = obj.homework
+        teacher = getattr(h, "created_by", None) or getattr(getattr(h, "kids_class", None), "teacher", None)
+        teacher_display = ""
+        teacher_subject = ""
+        if teacher:
+            teacher_display = (
+                f"{(teacher.first_name or '').strip()} {(teacher.last_name or '').strip()}".strip()
+                or (teacher.email or "")
+            )
+            teacher_subject = (
+                KidsTeacherBranch.objects.filter(teacher_id=teacher.id).values_list("subject", flat=True).first()
+                or ""
+            ).strip()
+            if not teacher_subject:
+                teacher_subject = "Sınıf Öğretmeni"
+        return {
+            "id": h.id,
+            "kids_class": h.kids_class_id,
+            "class_name": h.kids_class.name if getattr(h, "kids_class", None) else "",
+            "teacher_display": teacher_display,
+            "teacher_subject": teacher_subject,
+            "title": h.title,
+            "description": h.description,
+            "page_start": h.page_start,
+            "page_end": h.page_end,
+            "due_at": h.due_at.isoformat() if h.due_at else None,
+            "is_published": bool(h.is_published),
+            "attachments": _homework_attachment_payloads(self.context.get("request"), h),
+            "created_at": h.created_at.isoformat() if h.created_at else None,
+            "updated_at": h.updated_at.isoformat() if h.updated_at else None,
+        }
+
+
+class KidsHomeworkStudentMarkDoneSerializer(serializers.Serializer):
+    note = serializers.CharField(max_length=600, required=False, allow_blank=True)
+
+
+class KidsHomeworkParentReviewSerializer(serializers.Serializer):
+    approved = serializers.BooleanField(required=True)
+    note = serializers.CharField(max_length=600, required=False, allow_blank=True)
+
+
+class KidsHomeworkTeacherReviewSerializer(serializers.Serializer):
+    approved = serializers.BooleanField(required=True)
+    note = serializers.CharField(max_length=600, required=False, allow_blank=True)
+
+
+class KidsHomeworkAttachmentUploadSerializer(serializers.Serializer):
+    file = serializers.FileField(required=True)
+
+    def validate_file(self, value):
+        image_max_size = 10 * 1024 * 1024
+        document_max_size = 20 * 1024 * 1024
+        size = int(getattr(value, "size", 0) or 0)
+        content_type = str(getattr(value, "content_type", "") or "").lower()
+        file_name = str(getattr(value, "name", "") or "").lower()
+        is_image = content_type.startswith("image/") or file_name.endswith(
+            (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
+        )
+        if size <= 0:
+            raise serializers.ValidationError("Dosya boş olamaz.")
+        if is_image and size > image_max_size:
+            raise serializers.ValidationError("Görsel dosyası en fazla 10 MB olabilir.")
+        if not is_image and size > document_max_size:
+            raise serializers.ValidationError("Döküman dosyası en fazla 20 MB olabilir.")
+        return value
 
 
 class KidsSubmissionSerializer(serializers.ModelSerializer):
@@ -742,6 +1087,11 @@ class KidsSubmissionReviewSerializer(serializers.Serializer):
         return attrs
 
 
+class KidsSubmissionParentReviewSerializer(serializers.Serializer):
+    approved = serializers.BooleanField(required=True)
+    note = serializers.CharField(max_length=600, required=False, allow_blank=True)
+
+
 class KidsSubmissionHighlightSerializer(serializers.Serializer):
     """Öğretmen: bu projede öne çıkan teslim (proje yıldızı)."""
 
@@ -795,6 +1145,10 @@ class KidsTeacherSubmissionSerializer(serializers.ModelSerializer):
             "steps_payload",
             "video_url",
             "caption",
+            "student_marked_done_at",
+            "parent_review_status",
+            "parent_reviewed_at",
+            "parent_note_to_teacher",
             "teacher_review_valid",
             "teacher_review_positive",
             "teacher_note_to_student",
@@ -925,6 +1279,30 @@ class KidsMessageSerializer(serializers.ModelSerializer):
 
 
 class KidsAnnouncementSerializer(serializers.ModelSerializer):
+    attachments = serializers.SerializerMethodField()
+
+    def get_attachments(self, obj):
+        request = self.context.get("request")
+        rows = getattr(obj, "attachments", None)
+        if rows is not None and hasattr(rows, "all"):
+            items = rows.all()
+        else:
+            items = KidsAnnouncementAttachment.objects.filter(announcement=obj).order_by("created_at", "id")
+        out = []
+        for a in items:
+            file_url = _absolute_media_url(request, a.file.url) if getattr(a, "file", None) else ""
+            out.append(
+                {
+                    "id": a.id,
+                    "url": file_url,
+                    "original_name": a.original_name or "",
+                    "content_type": a.content_type or "",
+                    "size_bytes": int(a.size_bytes or 0),
+                    "created_at": a.created_at.isoformat() if a.created_at else None,
+                }
+            )
+        return out
+
     class Meta:
         model = KidsAnnouncement
         fields = (
@@ -939,6 +1317,7 @@ class KidsAnnouncementSerializer(serializers.ModelSerializer):
             "is_published",
             "published_at",
             "expires_at",
+            "attachments",
             "created_by",
             "created_at",
             "updated_at",
@@ -963,6 +1342,27 @@ class KidsAnnouncementSerializer(serializers.ModelSerializer):
         if expires_at and expires_at <= timezone.now():
             raise serializers.ValidationError({"expires_at": "Bitiş tarihi gelecekte olmalıdır."})
         return attrs
+
+
+class KidsAnnouncementAttachmentUploadSerializer(serializers.Serializer):
+    file = serializers.FileField(required=True)
+
+    def validate_file(self, value):
+        image_max_size = 10 * 1024 * 1024
+        document_max_size = 20 * 1024 * 1024
+        size = int(getattr(value, "size", 0) or 0)
+        content_type = str(getattr(value, "content_type", "") or "").lower()
+        file_name = str(getattr(value, "name", "") or "").lower()
+        is_image = content_type.startswith("image/") or file_name.endswith(
+            (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
+        )
+        if size <= 0:
+            raise serializers.ValidationError("Dosya boş olamaz.")
+        if is_image and size > image_max_size:
+            raise serializers.ValidationError("Görsel dosyası en fazla 10 MB olabilir.")
+        if not is_image and size > document_max_size:
+            raise serializers.ValidationError("Döküman dosyası en fazla 20 MB olabilir.")
+        return value
 
 class KidsChallengeMemberReadSerializer(serializers.ModelSerializer):
     student = KidsUserSerializer(read_only=True)

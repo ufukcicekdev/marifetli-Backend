@@ -31,7 +31,7 @@ from .models import (
     KidsUser,
     KidsUserRole,
 )
-from .auth_utils import is_kids_admin_user, is_kids_student_user
+from .auth_utils import is_kids_student_user
 from .notifications_service import create_kids_notification
 from .permissions import IsKidsParent, IsKidsTeacherOrAdmin
 from .serializers import (
@@ -44,7 +44,7 @@ from .serializers import (
     KidsTeacherChallengeCreateSerializer,
     KidsTeacherChallengeReviewSerializer,
 )
-from .views import KidsAuthenticatedMixin
+from .views import KidsAuthenticatedMixin, _teacher_class_queryset
 
 logger = logging.getLogger(__name__)
 
@@ -516,12 +516,9 @@ class KidsTeacherChallengeListView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def get(self, request, class_id):
-        try:
-            kc = KidsClass.objects.get(pk=class_id)
-        except KidsClass.DoesNotExist:
+        kc = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kc:
             return Response({"detail": "Sınıf bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
-        if kc.teacher_id != request.user.pk and not is_kids_admin_user(request.user):
-            return Response({"detail": "Bu sınıfın öğretmeni değilsin."}, status=status.HTTP_403_FORBIDDEN)
         st = (request.query_params.get("status") or "").strip()
         qs = KidsChallenge.objects.filter(kids_class=kc).select_related("kids_class").prefetch_related("members__student")
         allowed_status = {c[0] for c in KidsChallenge.Status.choices}
@@ -535,12 +532,9 @@ class KidsTeacherChallengeListView(KidsAuthenticatedMixin, APIView):
 
     def post(self, request, class_id):
         """Öğretmen doğrudan aktif yarışma oluşturur; seçilen öğrenciler üye olur (öğrenci kaynaklı çakışmalar temizlenir)."""
-        try:
-            kc = KidsClass.objects.get(pk=class_id)
-        except KidsClass.DoesNotExist:
+        kc = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kc:
             return Response({"detail": "Sınıf bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
-        if kc.teacher_id != request.user.pk and not is_kids_admin_user(request.user):
-            return Response({"detail": "Bu sınıfın öğretmeni değilsin."}, status=status.HTTP_403_FORBIDDEN)
         ser = KidsTeacherChallengeCreateSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         student_ids = list(dict.fromkeys(ser.validated_data.get("student_ids") or []))
@@ -583,12 +577,9 @@ class KidsTeacherChallengeReviewView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def post(self, request, class_id, pk):
-        try:
-            kc = KidsClass.objects.get(pk=class_id)
-        except KidsClass.DoesNotExist:
+        kc = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kc:
             return Response({"detail": "Sınıf bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
-        if kc.teacher_id != request.user.pk and not is_kids_admin_user(request.user):
-            return Response({"detail": "Bu sınıfın öğretmeni değilsin."}, status=status.HTTP_403_FORBIDDEN)
         try:
             ch = KidsChallenge.objects.select_related("kids_class", "created_by_student").get(pk=pk, kids_class=kc)
         except KidsChallenge.DoesNotExist:

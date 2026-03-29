@@ -41,9 +41,11 @@ from .jwt_utils import kids_decode_token, kids_encode_token
 from .main_site_bridge import provision_kids_parent_user, unique_username_from_email
 from .models import (
     KidsAnnouncement,
+    KidsAnnouncementAttachment,
     KidsAssignment,
     KidsChallengeMember,
     KidsClass,
+    KidsClassTeacher,
     KidsConversation,
     KidsEnrollment,
     KidsFCMDeviceToken,
@@ -51,6 +53,9 @@ from .models import (
     KidsGame,
     KidsGameProgress,
     KidsGameSession,
+    KidsHomework,
+    KidsHomeworkAttachment,
+    KidsHomeworkSubmission,
     KidsInvite,
     KidsMessage,
     KidsMessageReadState,
@@ -60,6 +65,8 @@ from .models import (
     KidsSchoolTeacher,
     KidsSchoolYearProfile,
     KidsSubmission,
+    KidsSubject,
+    KidsTeacherBranch,
     KidsUser,
     KidsUserBadge,
     KidsUserRole,
@@ -67,7 +74,11 @@ from .models import (
 )
 from .notifications_service import (
     create_kids_notification,
+    notify_parent_homework_review_required,
+    notify_student_homework_teacher_reviewed,
     notify_students_new_assignment,
+    notify_students_new_homework,
+    notify_teacher_homework_parent_approved,
     notify_teacher_submission_received,
 )
 from .permissions import IsKidsAdmin, IsKidsParent, IsKidsTeacherOrAdmin
@@ -85,6 +96,7 @@ from users.utils import generate_verification_token
 from .serializers import (
     _absolute_media_url,
     KidsAnnouncementSerializer,
+    KidsAnnouncementAttachmentUploadSerializer,
     KidsAcceptInviteFamilySerializer,
     KidsAcceptInviteLegacySerializer,
     KidsClassInviteLinkSerializer,
@@ -92,6 +104,8 @@ from .serializers import (
     KidsAdminAssignSchoolTeacherSerializer,
     KidsAdminSchoolCreateSerializer,
     KidsClassSerializer,
+    KidsClassTeacherSerializer,
+    KidsClassTeacherWriteSerializer,
     KidsConversationSerializer,
     KidsEnrollmentSerializer,
     KidsFreestylePostSerializer,
@@ -107,8 +121,16 @@ from .serializers import (
     KidsParentGamePolicySerializer,
     KidsSchoolSerializer,
     KidsSchoolYearProfileWriteSerializer,
+    KidsHomeworkParentReviewSerializer,
+    KidsHomeworkAttachmentUploadSerializer,
+    KidsHomeworkSerializer,
+    KidsHomeworkStudentMarkDoneSerializer,
+    KidsHomeworkSubmissionSerializer,
+    KidsHomeworkTeacherReviewSerializer,
     KidsSubmissionHighlightSerializer,
     KidsSubmissionReviewSerializer,
+    KidsSubjectSerializer,
+    KidsSubjectWriteSerializer,
     KidsSubmissionSerializer,
     KidsTeacherSubmissionSerializer,
     KidsUserProfileUpdateSerializer,
@@ -223,7 +245,22 @@ def _issue_login_tokens(actor: KidsUser | MainUser, raw_password: str) -> tuple[
     return str(ref.access_token), str(ref), "main_site"
 
 
-def _parent_child_overview_dict(student: KidsUser) -> dict:
+def _teacher_class_queryset(user):
+    qs = KidsClass.objects.select_related("school", "teacher").prefetch_related(
+        "teacher_assignments__teacher"
+    )
+    if is_kids_admin_user(user):
+        return qs
+    return qs.filter(
+        Q(teacher=user) | Q(teacher_assignments__teacher=user, teacher_assignments__is_active=True)
+    ).distinct()
+
+
+def _teacher_can_access_class(user, class_id: int) -> bool:
+    return _teacher_class_queryset(user).filter(pk=class_id).exists()
+
+
+def _parent_child_overview_dict(student: KidsUser, request=None) -> dict:
     """Veli paneli: çocuğun sınıfları, rozetleri, proje ve yarışma özeti (salt okunur)."""
     class_ids = list(
         KidsEnrollment.objects.filter(student=student).values_list("kids_class_id", flat=True)
@@ -233,19 +270,46 @@ def _parent_child_overview_dict(student: KidsUser) -> dict:
         for kc in (
             KidsClass.objects.filter(id__in=class_ids)
             .select_related("school", "teacher")
+            .prefetch_related("teacher_assignments__teacher")
             .order_by("name")
         ):
-            teacher_display = (
-                f"{(kc.teacher.first_name or '').strip()} {(kc.teacher.last_name or '').strip()}".strip()
-                or (kc.teacher.email or "")
-            )
+            teachers = []
+            for row in kc.teacher_assignments.filter(is_active=True).select_related("teacher"):
+                t = row.teacher
+                display = (
+                    f"{(t.first_name or '').strip()} {(t.last_name or '').strip()}".strip()
+                    or (t.email or "")
+                )
+                teachers.append(
+                    {
+                        "teacher_user_id": t.id,
+                        "teacher_display": display,
+                        "subject": row.subject or "",
+                        "is_primary": t.id == kc.teacher_id,
+                    }
+                )
+            if not teachers and kc.teacher_id:
+                teacher_display = (
+                    f"{(kc.teacher.first_name or '').strip()} {(kc.teacher.last_name or '').strip()}".strip()
+                    or (kc.teacher.email or "")
+                )
+                teachers.append(
+                    {
+                        "teacher_user_id": kc.teacher_id,
+                        "teacher_display": teacher_display,
+                        "subject": "Sınıf Öğretmeni",
+                        "is_primary": True,
+                    }
+                )
+            primary = next((t for t in teachers if t.get("is_primary")), teachers[0] if teachers else None)
             classes_data.append(
                 {
                     "id": kc.id,
                     "name": kc.name,
                     "school_name": kc.school.name if kc.school else "",
-                    "teacher_user_id": kc.teacher_id,
-                    "teacher_display": teacher_display,
+                    "teacher_user_id": primary["teacher_user_id"] if primary else kc.teacher_id,
+                    "teacher_display": primary["teacher_display"] if primary else "",
+                    "teachers": teachers,
                 }
             )
 
@@ -263,17 +327,19 @@ def _parent_child_overview_dict(student: KidsUser) -> dict:
     for m in (
         KidsChallengeMember.objects.filter(student=student)
         .select_related("challenge", "challenge__kids_class")
-        .order_by("-joined_at")[:12]
+        .order_by("-joined_at")[:40]
     ):
         ch = m.challenge
         kc = ch.kids_class
         challenges_data.append(
             {
+                "id": ch.id,
                 "title": ch.title,
                 "status": ch.status,
                 "class_name": kc.name if kc else "Serbest",
                 "peer_scope": getattr(ch, "peer_scope", "class_peer"),
                 "is_initiator": m.is_initiator,
+                "joined_at": m.joined_at.isoformat() if m.joined_at else None,
             }
         )
 
@@ -325,7 +391,83 @@ def _parent_child_overview_dict(student: KidsUser) -> dict:
             )
 
     pending_parent_actions: list[dict] = []
-    # İleride: yükleme onayı vb. { "type": "...", "title": "...", "ref_id": ... }
+    homework_history: list[dict] = []
+    hw_qs = (
+        KidsHomeworkSubmission.objects.filter(student=student)
+        .select_related("homework", "homework__kids_class", "homework__created_by")
+        .prefetch_related("homework__attachments")
+        .order_by("-updated_at", "-id")[:60]
+    )
+    for sub in hw_qs:
+        teacher = getattr(sub.homework, "created_by", None)
+        teacher_display = ""
+        teacher_subject = ""
+        if teacher:
+            teacher_display = (
+                f"{(teacher.first_name or '').strip()} {(teacher.last_name or '').strip()}".strip()
+                or (teacher.email or "")
+            )
+            teacher_subject = (
+                KidsTeacherBranch.objects.filter(teacher_id=teacher.id).values_list("subject", flat=True).first()
+                or ""
+            ).strip()
+            if not teacher_subject:
+                teacher_subject = "Sınıf Öğretmeni"
+        homework_history.append(
+            {
+                "submission_id": sub.id,
+                "homework_id": sub.homework_id,
+                "title": sub.homework.title,
+                "description": sub.homework.description,
+                "class_name": sub.homework.kids_class.name,
+                "teacher_display": teacher_display,
+                "teacher_subject": teacher_subject,
+                "status": sub.status,
+                "due_at": sub.homework.due_at.isoformat() if sub.homework.due_at else None,
+                "student_done_at": sub.student_done_at.isoformat() if sub.student_done_at else None,
+                "student_note": (sub.student_note or "").strip()[:280],
+                "parent_reviewed_at": (
+                    sub.parent_reviewed_at.isoformat() if sub.parent_reviewed_at else None
+                ),
+                "parent_note": (sub.parent_note or "").strip()[:280],
+                "teacher_reviewed_at": (
+                    sub.teacher_reviewed_at.isoformat() if sub.teacher_reviewed_at else None
+                ),
+                "teacher_note": (sub.teacher_note or "").strip()[:280],
+                "attachments": [
+                    {
+                        "id": att.id,
+                        "url": _absolute_media_url(request, att.file.url) if getattr(att, "file", None) else "",
+                        "original_name": att.original_name,
+                        "content_type": att.content_type,
+                        "size_bytes": att.size_bytes,
+                    }
+                    for att in sub.homework.attachments.all()
+                ],
+            }
+        )
+    pending_hw_qs = (
+        KidsHomeworkSubmission.objects.filter(
+            student=student,
+            status=KidsHomeworkSubmission.Status.STUDENT_DONE,
+        )
+        .select_related("homework", "homework__kids_class")
+        .order_by("-student_done_at", "-updated_at")[:20]
+    )
+    for sub in pending_hw_qs:
+        pending_parent_actions.append(
+            {
+                "type": "homework_parent_review",
+                "submission_id": sub.id,
+                "assignment_id": sub.homework_id,
+                "assignment_title": sub.homework.title,
+                "class_name": sub.homework.kids_class.name,
+                "round_number": 1,
+                "student_marked_done_at": (
+                    sub.student_done_at.isoformat() if sub.student_done_at else None
+                ),
+            }
+        )
 
     return {
         "id": student.id,
@@ -338,6 +480,7 @@ def _parent_child_overview_dict(student: KidsUser) -> dict:
         "badges": badges_raw,
         "assignments_recent": assignments_out,
         "challenges": challenges_data,
+        "homework_history": homework_history,
         "pending_parent_actions": pending_parent_actions,
     }
 
@@ -651,7 +794,7 @@ def _valid_public_http_url(url: str) -> bool:
 
 
 def _assignment_teacher_review_allowed(assignment) -> bool:
-    """Değerlendirme, son teslim zamanı geçtikten sonra (veya eski projelerde tarih yoksa)."""
+    """Geriye dönük uyumluluk: tarih bazlı eski kural."""
     now = timezone.now()
     if not assignment.submission_closes_at:
         return True
@@ -1093,7 +1236,7 @@ class KidsParentChildrenOverviewView(KidsAuthenticatedMixin, APIView):
         children = request.user.kids_children_accounts.filter(
             role=KidsUserRole.STUDENT, is_active=True
         ).order_by("first_name", "last_name", "id")
-        return Response({"children": [_parent_child_overview_dict(s) for s in children]})
+        return Response({"children": [_parent_child_overview_dict(s, request=request) for s in children]})
 
 
 class KidsParentGamePolicyDetailView(KidsAuthenticatedMixin, APIView):
@@ -1224,10 +1367,15 @@ class KidsAdminTeacherListCreateView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsAdmin]
 
     def get(self, request):
-        qs = (
+        qs = list(
             MainUser.objects.filter(kids_portal_role=KidsPortalRole.TEACHER)
             .only("id", "email", "first_name", "last_name", "is_active", "created_at")
             .order_by("-created_at")
+        )
+        subject_by_teacher_id = dict(
+            KidsTeacherBranch.objects.filter(teacher_id__in=[t.id for t in qs]).values_list(
+                "teacher_id", "subject"
+            )
         )
         rows = [
             {
@@ -1236,6 +1384,7 @@ class KidsAdminTeacherListCreateView(KidsAuthenticatedMixin, APIView):
                 "first_name": t.first_name,
                 "last_name": t.last_name,
                 "is_active": t.is_active,
+                "subject": subject_by_teacher_id.get(t.id, ""),
                 "created_at": t.created_at,
             }
             for t in qs
@@ -1246,8 +1395,17 @@ class KidsAdminTeacherListCreateView(KidsAuthenticatedMixin, APIView):
         email = (request.data.get("email") or "").strip().lower()
         first_name = (request.data.get("first_name") or "").strip()
         last_name = (request.data.get("last_name") or "").strip()
+        subject = (request.data.get("subject") or "").strip()
         if not email:
             return Response({"detail": "E-posta zorunlu."}, status=status.HTTP_400_BAD_REQUEST)
+        if not subject:
+            return Response({"detail": "Branş zorunlu."}, status=status.HTTP_400_BAD_REQUEST)
+        subject_row = KidsSubject.objects.filter(name__iexact=subject, is_active=True).first()
+        if not subject_row:
+            return Response(
+                {"detail": "Geçersiz branş. Lütfen branş yönetiminden aktif bir branş seçin."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         if KidsUser.objects.filter(email__iexact=email).exists():
             return Response(
                 {"detail": "Bu e-posta bir öğrenci hesabında kullanılıyor; öğretmen için farklı e-posta seçin."},
@@ -1291,6 +1449,10 @@ class KidsAdminTeacherListCreateView(KidsAuthenticatedMixin, APIView):
                 last_name=last_name[:150],
                 kids_portal_role=KidsPortalRole.TEACHER,
             )
+            KidsTeacherBranch.objects.update_or_create(
+                teacher_id=teacher.id,
+                defaults={"subject": subject_row.name},
+            )
             if school_ids is not None:
                 for sid in school_ids:
                     sid_int = int(sid)
@@ -1312,6 +1474,7 @@ class KidsAdminTeacherListCreateView(KidsAuthenticatedMixin, APIView):
                     "first_name": teacher.first_name or "",
                     "last_name": teacher.last_name or "",
                     "is_active": teacher.is_active,
+                    "subject": subject_row.name,
                     "created_at": teacher.created_at,
                 },
                 "email_sent": sent_ok,
@@ -1331,16 +1494,38 @@ class KidsAdminTeacherDetailPatchView(KidsAuthenticatedMixin, APIView):
 
     def patch(self, request, pk: int):
         is_active = request.data.get("is_active")
-        if not isinstance(is_active, bool):
+        has_is_active = "is_active" in request.data
+        if has_is_active and not isinstance(is_active, bool):
             return Response(
                 {"detail": "is_active alanı boolean olmalıdır."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        subject = (request.data.get("subject") or "").strip() if "subject" in request.data else None
         teacher = MainUser.objects.filter(pk=pk, kids_portal_role=KidsPortalRole.TEACHER).first()
         if not teacher:
             return Response({"detail": "Öğretmen bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
-        teacher.is_active = is_active
-        teacher.save(update_fields=["is_active"])
+        updates = []
+        if has_is_active:
+            teacher.is_active = bool(is_active)
+            updates.append("is_active")
+        if updates:
+            teacher.save(update_fields=updates)
+        if subject is not None:
+            if not subject:
+                return Response({"detail": "Branş boş olamaz."}, status=status.HTTP_400_BAD_REQUEST)
+            subject_row = KidsSubject.objects.filter(name__iexact=subject, is_active=True).first()
+            if not subject_row:
+                return Response(
+                    {"detail": "Geçersiz branş. Lütfen branş yönetiminden aktif bir branş seçin."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            KidsTeacherBranch.objects.update_or_create(
+                teacher_id=teacher.id,
+                defaults={"subject": subject_row.name},
+            )
+        current_subject = (
+            KidsTeacherBranch.objects.filter(teacher_id=teacher.id).values_list("subject", flat=True).first() or ""
+        )
         return Response(
             {
                 "teacher": {
@@ -1349,10 +1534,103 @@ class KidsAdminTeacherDetailPatchView(KidsAuthenticatedMixin, APIView):
                     "first_name": teacher.first_name or "",
                     "last_name": teacher.last_name or "",
                     "is_active": teacher.is_active,
+                    "subject": current_subject,
                     "created_at": teacher.created_at,
                 }
             }
         )
+
+
+class KidsAdminTeacherResendWelcomeView(KidsAuthenticatedMixin, APIView):
+    """Admin: öğretmene yeni geçici şifre ile tekrar hoş geldin e-postası gönder."""
+
+    authentication_classes = [KidsOrMainSiteStaffJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsKidsAdmin]
+
+    def post(self, request, pk: int):
+        teacher = MainUser.objects.filter(pk=pk, kids_portal_role=KidsPortalRole.TEACHER).first()
+        if not teacher:
+            return Response({"detail": "Öğretmen bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
+
+        temp_password = _random_temp_password()
+        teacher.set_password(temp_password)
+        teacher.save(update_fields=["password"])
+
+        sent_ok, err = _send_kids_teacher_welcome_email(
+            to_email=teacher.email,
+            first_name=teacher.first_name or "",
+            temp_password=temp_password,
+        )
+        return Response(
+            {
+                "email_sent": sent_ok,
+                "email_error": err,
+                "temporary_password": None if sent_ok else temp_password,
+            }
+        )
+
+
+class KidsAdminSubjectListCreateView(KidsAuthenticatedMixin, APIView):
+    authentication_classes = [KidsOrMainSiteStaffJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsKidsAdmin]
+
+    def get(self, request):
+        rows = list(KidsSubject.objects.all().order_by("name", "id"))
+        usage_map = dict(
+            KidsClassTeacher.objects.values("subject")
+            .annotate(total=Count("id"))
+            .values_list("subject", "total")
+        )
+        for row in rows:
+            row.usage_count = int(usage_map.get(row.name, 0) or 0)
+        return Response({"subjects": KidsSubjectSerializer(rows, many=True).data})
+
+    def post(self, request):
+        ser = KidsSubjectWriteSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        name = (ser.validated_data["name"] or "").strip()
+        if not name:
+            return Response({"detail": "Branş adı zorunludur."}, status=status.HTTP_400_BAD_REQUEST)
+        existing = KidsSubject.objects.filter(name__iexact=name).first()
+        if existing:
+            existing.name = name[:80]
+            existing.is_active = bool(ser.validated_data.get("is_active", True))
+            existing.save(update_fields=["name", "is_active", "updated_at"])
+            return Response(KidsSubjectSerializer(existing).data)
+        row = KidsSubject.objects.create(
+            name=name[:80],
+            is_active=bool(ser.validated_data.get("is_active", True)),
+        )
+        return Response(KidsSubjectSerializer(row).data, status=status.HTTP_201_CREATED)
+
+
+class KidsAdminSubjectDetailView(KidsAuthenticatedMixin, APIView):
+    authentication_classes = [KidsOrMainSiteStaffJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsKidsAdmin]
+
+    def patch(self, request, pk: int):
+        row = KidsSubject.objects.filter(pk=pk).first()
+        if not row:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        if "name" in request.data:
+            name = str(request.data.get("name") or "").strip()
+            if not name:
+                return Response({"detail": "Branş adı boş olamaz."}, status=status.HTTP_400_BAD_REQUEST)
+            dup = KidsSubject.objects.filter(name__iexact=name).exclude(pk=pk).exists()
+            if dup:
+                return Response({"detail": "Bu branş zaten kayıtlı."}, status=status.HTTP_400_BAD_REQUEST)
+            row.name = name[:80]
+        if "is_active" in request.data:
+            row.is_active = bool(request.data.get("is_active"))
+        row.save(update_fields=["name", "is_active", "updated_at"])
+        return Response(KidsSubjectSerializer(row).data)
+
+    def delete(self, request, pk: int):
+        row = KidsSubject.objects.filter(pk=pk).first()
+        if not row:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        row.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class KidsAdminSchoolListCreateView(KidsAuthenticatedMixin, APIView):
@@ -1727,7 +2005,7 @@ class KidsClassInviteLinkCreateView(KidsAuthenticatedMixin, APIView):
         ser = KidsClassInviteLinkSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         days = ser.validated_data["expires_days"]
-        kids_class = KidsClass.objects.filter(pk=class_id, teacher=request.user).first()
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
         if not kids_class:
             return Response(
                 {"detail": "Sınıf bulunamadı veya yetkiniz yok."},
@@ -1755,13 +2033,18 @@ class KidsClassListCreateView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def get(self, request):
-        qs = KidsClass.objects.filter(teacher=request.user).select_related("school", "teacher")
+        qs = _teacher_class_queryset(request.user)
         return Response(KidsClassSerializer(qs, many=True, context={"request": request}).data)
 
     def post(self, request):
         ser = KidsClassSerializer(data=request.data, context={"request": request})
         ser.is_valid(raise_exception=True)
         kids_class = ser.save(teacher=request.user)
+        KidsClassTeacher.objects.get_or_create(
+            kids_class=kids_class,
+            teacher=request.user,
+            defaults={"subject": "Sınıf Öğretmeni", "is_active": True},
+        )
         kids_class = KidsClass.objects.select_related("school", "teacher").get(pk=kids_class.pk)
         return Response(
             KidsClassSerializer(kids_class, context={"request": request}).data,
@@ -1773,11 +2056,7 @@ class KidsClassDetailView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def get_object(self, request, pk):
-        return (
-            KidsClass.objects.filter(pk=pk, teacher=request.user)
-            .select_related("school", "teacher")
-            .first()
-        )
+        return _teacher_class_queryset(request.user).filter(pk=pk).first()
 
     def get(self, request, pk):
         obj = self.get_object(request, pk)
@@ -1800,6 +2079,206 @@ class KidsClassDetailView(KidsAuthenticatedMixin, APIView):
         if not obj:
             return Response(status=status.HTTP_404_NOT_FOUND)
         obj.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class KidsSchoolClassDirectoryView(KidsAuthenticatedMixin, APIView):
+    """Öğretmen paneli: seçilen okuldaki tüm sınıfları ve katılım durumunu listeler."""
+
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def get(self, request, school_id: int):
+        school = schools_queryset_for_main_user(request.user).filter(pk=school_id).first()
+        if not school:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        rows = (
+            KidsClass.objects.filter(school_id=school_id)
+            .select_related("teacher")
+            .order_by("name", "id")
+        )
+        ids = [r.id for r in rows]
+        assigned_ids = set()
+        if is_main_user(request.user):
+            assigned_ids = set(
+                KidsClassTeacher.objects.filter(
+                    kids_class_id__in=ids,
+                    teacher_id=request.user.id,
+                    is_active=True,
+                ).values_list("kids_class_id", flat=True)
+            )
+            assigned_ids.update(
+                KidsClass.objects.filter(id__in=ids, teacher_id=request.user.id).values_list("id", flat=True)
+            )
+        data = []
+        for row in rows:
+            teacher = row.teacher
+            teacher_display = (
+                f"{(teacher.first_name or '').strip()} {(teacher.last_name or '').strip()}".strip()
+                or (teacher.email or "")
+            )
+            is_assigned = row.id in assigned_ids
+            data.append(
+                {
+                    "id": row.id,
+                    "name": row.name,
+                    "description": row.description or "",
+                    "academic_year_label": row.academic_year_label or "",
+                    "teacher_display": teacher_display,
+                    "is_assigned": is_assigned,
+                }
+            )
+        return Response({"classes": data})
+
+
+class KidsClassSelfJoinView(KidsAuthenticatedMixin, APIView):
+    """Öğretmen paneli: öğretmenin okuluna bağlı mevcut sınıfa kendini eklemesi."""
+
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def post(self, request, class_id: int):
+        if not is_main_user(request.user):
+            return Response({"detail": "Bu işlem için öğretmen hesabı gerekir."}, status=status.HTTP_403_FORBIDDEN)
+        kids_class = KidsClass.objects.select_related("school").filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        school_ok = KidsSchoolTeacher.objects.filter(
+            school_id=kids_class.school_id,
+            user_id=request.user.id,
+            is_active=True,
+        ).exists() or kids_class.school.teacher_id == request.user.id
+        if not school_ok:
+            return Response(
+                {"detail": "Bu sınıfa katılmak için önce okul üyeliğiniz olmalı."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        subject = (
+            KidsTeacherBranch.objects.filter(teacher_id=request.user.id).values_list("subject", flat=True).first() or ""
+        ).strip()
+        subject_row = KidsSubject.objects.filter(name__iexact=subject, is_active=True).first()
+        if not subject_row:
+            return Response(
+                {"detail": "Öğretmen branşı tanımlı değil veya aktif değil. Yönetimden branş atayın."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        row, _ = KidsClassTeacher.objects.update_or_create(
+            kids_class=kids_class,
+            teacher_id=request.user.id,
+            defaults={"subject": subject_row.name, "is_active": True},
+        )
+        return Response(KidsClassTeacherSerializer(row).data, status=status.HTTP_201_CREATED)
+
+
+class KidsClassTeacherListCreateView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def get(self, request, class_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        qs = (
+            KidsClassTeacher.objects.filter(kids_class=kids_class, is_active=True)
+            .select_related("teacher")
+            .order_by("assigned_at")
+        )
+        return Response(KidsClassTeacherSerializer(qs, many=True).data)
+
+    def post(self, request, class_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        ser = KidsClassTeacherWriteSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        tid = int(ser.validated_data["teacher_user_id"])
+        subject = (ser.validated_data.get("subject") or "").strip()
+        subject_row = KidsSubject.objects.filter(name__iexact=subject, is_active=True).first()
+        teacher_user = MainUser.objects.filter(
+            pk=tid,
+            kids_portal_role=KidsPortalRole.TEACHER,
+        ).first()
+        if not teacher_user:
+            return Response({"detail": "Öğretmen bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
+        if not subject:
+            teacher_subject = (
+                KidsTeacherBranch.objects.filter(teacher_id=teacher_user.id)
+                .values_list("subject", flat=True)
+                .first()
+                or ""
+            )
+            subject = teacher_subject.strip()
+            subject_row = KidsSubject.objects.filter(name__iexact=subject, is_active=True).first()
+        if not subject_row:
+            return Response(
+                {
+                    "detail": (
+                        "Öğretmenin branşı tanımlı değil veya aktif değil. "
+                        "Önce öğretmen kartından branş seçin."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not KidsSchoolTeacher.objects.filter(
+            school_id=kids_class.school_id,
+            user_id=teacher_user.id,
+            is_active=True,
+        ).exists():
+            return Response(
+                {"detail": "Bu öğretmen sınıfın okuluna atanmış değil."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        row, _ = KidsClassTeacher.objects.update_or_create(
+            kids_class=kids_class,
+            teacher=teacher_user,
+            defaults={
+                "subject": subject_row.name,
+                "is_active": bool(ser.validated_data.get("is_active", True)),
+            },
+        )
+        return Response(KidsClassTeacherSerializer(row).data, status=status.HTTP_201_CREATED)
+
+
+class KidsClassTeacherDetailView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def patch(self, request, class_id, teacher_user_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        row = KidsClassTeacher.objects.filter(
+            kids_class_id=class_id,
+            teacher_id=teacher_user_id,
+        ).select_related("teacher").first()
+        if not row:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        subject = request.data.get("subject")
+        active = request.data.get("is_active")
+        updates = []
+        if subject is not None:
+            s = str(subject).strip()
+            if not s:
+                return Response({"detail": "Branş boş olamaz."}, status=status.HTTP_400_BAD_REQUEST)
+            subject_row = KidsSubject.objects.filter(name__iexact=s, is_active=True).first()
+            if not subject_row:
+                return Response(
+                    {"detail": "Branş listesinde olmayan bir alan seçildi. Önce yönetimden branş ekleyin."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            row.subject = subject_row.name
+            updates.append("subject")
+        if active is not None:
+            row.is_active = bool(active)
+            updates.append("is_active")
+        if updates:
+            row.save(update_fields=updates)
+        return Response(KidsClassTeacherSerializer(row).data)
+
+    def delete(self, request, class_id, teacher_user_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        KidsClassTeacher.objects.filter(
+            kids_class_id=class_id,
+            teacher_id=teacher_user_id,
+        ).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -1847,7 +2326,7 @@ class KidsSchoolListCreateView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def get(self, request):
-        qs = schools_queryset_for_main_user(request.user)
+        qs = schools_queryset_for_main_user(request.user).prefetch_related("year_profiles")
         return Response(KidsSchoolSerializer(qs, many=True).data)
 
     def post(self, request):
@@ -1869,7 +2348,12 @@ class KidsSchoolDetailView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def get_object(self, request, pk):
-        return schools_queryset_for_main_user(request.user).filter(pk=pk).first()
+        return (
+            schools_queryset_for_main_user(request.user)
+            .prefetch_related("year_profiles")
+            .filter(pk=pk)
+            .first()
+        )
 
     def get(self, request, pk):
         obj = self.get_object(request, pk)
@@ -1911,7 +2395,7 @@ class KidsEnrollmentListView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def get(self, request, class_id):
-        if not KidsClass.objects.filter(pk=class_id, teacher=request.user).exists():
+        if not _teacher_can_access_class(request.user, class_id):
             return Response(status=status.HTTP_404_NOT_FOUND)
         qs = KidsEnrollment.objects.filter(kids_class_id=class_id).select_related("student")
         published_count = KidsAssignment.objects.filter(
@@ -1946,7 +2430,7 @@ class KidsEnrollmentDestroyView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def delete(self, request, class_id, pk):
-        if not KidsClass.objects.filter(pk=class_id, teacher=request.user).exists():
+        if not _teacher_can_access_class(request.user, class_id):
             return Response(status=status.HTTP_404_NOT_FOUND)
         enrollment = KidsEnrollment.objects.filter(pk=pk, kids_class_id=class_id).select_related(
             "student"
@@ -1979,7 +2463,7 @@ class KidsInviteCreateView(KidsAuthenticatedMixin, APIView):
         ser = KidsInviteCreateSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         cid = ser.validated_data["kids_class_id"]
-        kids_class = KidsClass.objects.filter(pk=cid, teacher=request.user).first()
+        kids_class = _teacher_class_queryset(request.user).filter(pk=cid).first()
         if not kids_class:
             return Response(
                 {"detail": "Sınıf bulunamadı veya yetkiniz yok."},
@@ -2031,7 +2515,7 @@ class KidsAssignmentListCreateView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def get(self, request, class_id):
-        if not KidsClass.objects.filter(pk=class_id, teacher=request.user).exists():
+        if not _teacher_can_access_class(request.user, class_id):
             return Response(status=status.HTTP_404_NOT_FOUND)
         enrolled = KidsEnrollment.objects.filter(kids_class_id=class_id).count()
         qs = (
@@ -2048,7 +2532,7 @@ class KidsAssignmentListCreateView(KidsAuthenticatedMixin, APIView):
         )
 
     def post(self, request, class_id):
-        kids_class = KidsClass.objects.filter(pk=class_id, teacher=request.user).first()
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
         if not kids_class:
             return Response(status=status.HTTP_404_NOT_FOUND)
         ser = KidsAssignmentSerializer(data={**request.data, "kids_class": kids_class.id})
@@ -2085,7 +2569,7 @@ class KidsAssignmentDetailPatchView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def patch(self, request, class_id, assignment_id):
-        if not KidsClass.objects.filter(pk=class_id, teacher=request.user).exists():
+        if not _teacher_can_access_class(request.user, class_id):
             return Response(status=status.HTTP_404_NOT_FOUND)
         assignment = KidsAssignment.objects.filter(pk=assignment_id, kids_class_id=class_id).first()
         if not assignment:
@@ -2141,13 +2625,324 @@ class KidsAssignmentDetailPatchView(KidsAuthenticatedMixin, APIView):
         )
 
 
+class KidsHomeworkListCreateView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def get(self, request, class_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        qs = KidsHomework.objects.filter(kids_class_id=class_id).prefetch_related("attachments").order_by("-created_at")
+        return Response(KidsHomeworkSerializer(qs, many=True, context={"request": request}).data)
+
+    def post(self, request, class_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        ser = KidsHomeworkSerializer(data={**request.data, "kids_class": kids_class.id})
+        ser.is_valid(raise_exception=True)
+        with transaction.atomic():
+            hw = ser.save(created_by=request.user)
+            enrollments = list(
+                KidsEnrollment.objects.filter(kids_class_id=class_id).select_related("student")
+            )
+            submissions = []
+            for en in enrollments:
+                if en.student.role != KidsUserRole.STUDENT:
+                    continue
+                submissions.append(
+                    KidsHomeworkSubmission(
+                        homework=hw,
+                        student=en.student,
+                        status=KidsHomeworkSubmission.Status.PUBLISHED,
+                    )
+                )
+            if submissions:
+                KidsHomeworkSubmission.objects.bulk_create(submissions, ignore_conflicts=True)
+            if hw.is_published:
+                hid = hw.pk
+                transaction.on_commit(lambda h=hid: notify_students_new_homework(h))
+        hw = KidsHomework.objects.prefetch_related("attachments").get(pk=hw.pk)
+        return Response(KidsHomeworkSerializer(hw, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+
+class KidsHomeworkAttachmentUploadView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def post(self, request, class_id, homework_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        hw = KidsHomework.objects.filter(pk=homework_id, kids_class_id=class_id).first()
+        if not hw:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        ser = KidsHomeworkAttachmentUploadSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        f = ser.validated_data["file"]
+        att = KidsHomeworkAttachment.objects.create(
+            homework=hw,
+            file=f,
+            original_name=(getattr(f, "name", "") or "")[:255],
+            content_type=(getattr(f, "content_type", "") or "")[:120],
+            size_bytes=int(getattr(f, "size", 0) or 0),
+        )
+        hw = KidsHomework.objects.prefetch_related("attachments").get(pk=hw.pk)
+        return Response(
+            {
+                "attachment_id": att.id,
+                "homework": KidsHomeworkSerializer(hw, context={"request": request}).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class KidsHomeworkDetailPatchView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def patch(self, request, class_id, homework_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        hw = KidsHomework.objects.filter(pk=homework_id, kids_class_id=class_id).first()
+        if not hw:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        ser = KidsHomeworkSerializer(hw, data=request.data, partial=True, context={"request": request})
+        ser.is_valid(raise_exception=True)
+        hw = ser.save()
+        hw = KidsHomework.objects.prefetch_related("attachments").get(pk=hw.pk)
+        return Response(KidsHomeworkSerializer(hw, context={"request": request}).data)
+
+
+class KidsHomeworkAttachmentDetailView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def delete(self, request, class_id, homework_id, attachment_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        hw = KidsHomework.objects.filter(pk=homework_id, kids_class_id=class_id).first()
+        if not hw:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        att = KidsHomeworkAttachment.objects.filter(pk=attachment_id, homework_id=hw.pk).first()
+        if not att:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        att.file.delete(save=False)
+        att.delete()
+        hw = KidsHomework.objects.prefetch_related("attachments").get(pk=hw.pk)
+        return Response({"homework": KidsHomeworkSerializer(hw, context={"request": request}).data})
+
+
+class KidsTeacherHomeworkInboxView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def get(self, request):
+        qs = (
+            KidsHomeworkSubmission.objects.filter(
+                Q(homework__kids_class__teacher=request.user)
+                | Q(
+                    homework__kids_class__teacher_assignments__teacher=request.user,
+                    homework__kids_class__teacher_assignments__is_active=True,
+                ),
+                status=KidsHomeworkSubmission.Status.PARENT_APPROVED,
+            )
+            .distinct()
+            .select_related("student", "homework", "homework__kids_class", "homework__created_by")
+            .prefetch_related("homework__attachments")
+            .order_by("-parent_reviewed_at", "-updated_at")
+        )
+        return Response(KidsHomeworkSubmissionSerializer(qs, many=True, context={"request": request}).data)
+
+
+class KidsTeacherHomeworkSubmissionReviewView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def patch(self, request, submission_id):
+        sub = (
+            KidsHomeworkSubmission.objects.filter(
+                Q(homework__kids_class__teacher=request.user)
+                | Q(
+                    homework__kids_class__teacher_assignments__teacher=request.user,
+                    homework__kids_class__teacher_assignments__is_active=True,
+                ),
+                pk=submission_id,
+            )
+            .select_related("student", "homework", "homework__kids_class", "homework__created_by")
+            .prefetch_related("homework__attachments")
+            .first()
+        )
+        if not sub:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        if sub.status != KidsHomeworkSubmission.Status.PARENT_APPROVED:
+            return Response(
+                {"detail": "Öğretmen değerlendirmesi için önce veli onayı gerekir."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        ser = KidsHomeworkTeacherReviewSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        approved = bool(ser.validated_data["approved"])
+        note = (ser.validated_data.get("note") or "").strip()
+        sub.status = (
+            KidsHomeworkSubmission.Status.TEACHER_APPROVED
+            if approved
+            else KidsHomeworkSubmission.Status.TEACHER_REVISION
+        )
+        sub.teacher_note = note
+        sub.teacher_reviewed_at = timezone.now()
+        sub.teacher_reviewed_by = request.user
+        sub.save(
+            update_fields=[
+                "status",
+                "teacher_note",
+                "teacher_reviewed_at",
+                "teacher_reviewed_by",
+                "updated_at",
+            ]
+        )
+        sid = sub.pk
+        transaction.on_commit(lambda s=sid: notify_student_homework_teacher_reviewed(s))
+        return Response(KidsHomeworkSubmissionSerializer(sub, context={"request": request}).data)
+
+
+class KidsStudentHomeworkListView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not is_kids_student_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        qs = (
+            KidsHomeworkSubmission.objects.filter(
+                student=request.user,
+                homework__is_published=True,
+            )
+            .select_related("homework", "homework__kids_class", "homework__created_by")
+            .prefetch_related("homework__attachments")
+            .order_by("-homework__due_at", "-id")
+        )
+        return Response(KidsHomeworkSubmissionSerializer(qs, many=True, context={"request": request}).data)
+
+
+class KidsStudentHomeworkSubmissionMarkDoneView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, submission_id):
+        if not is_kids_student_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        sub = (
+            KidsHomeworkSubmission.objects.filter(
+                pk=submission_id,
+                student=request.user,
+                homework__is_published=True,
+            )
+            .select_related("homework", "homework__created_by")
+            .prefetch_related("homework__attachments")
+            .first()
+        )
+        if not sub:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        if sub.status == KidsHomeworkSubmission.Status.TEACHER_APPROVED:
+            return Response(
+                {"detail": "Öğretmen onaylanan ödev yeniden işaretlenemez."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        ser = KidsHomeworkStudentMarkDoneSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        sub.status = KidsHomeworkSubmission.Status.STUDENT_DONE
+        sub.student_done_at = timezone.now()
+        sub.student_note = (ser.validated_data.get("note") or "").strip()
+        sub.parent_reviewed_at = None
+        sub.parent_note = ""
+        sub.parent_reviewed_by = None
+        sub.teacher_reviewed_at = None
+        sub.teacher_note = ""
+        sub.teacher_reviewed_by = None
+        sub.save(
+            update_fields=[
+                "status",
+                "student_done_at",
+                "student_note",
+                "parent_reviewed_at",
+                "parent_note",
+                "parent_reviewed_by",
+                "teacher_reviewed_at",
+                "teacher_note",
+                "teacher_reviewed_by",
+                "updated_at",
+            ]
+        )
+        sid = sub.pk
+        transaction.on_commit(lambda s=sid: notify_parent_homework_review_required(s))
+        return Response(KidsHomeworkSubmissionSerializer(sub, context={"request": request}).data)
+
+
+class KidsParentHomeworkPendingListView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsParent]
+
+    def get(self, request):
+        qs = (
+            KidsHomeworkSubmission.objects.filter(
+                student__parent_account=request.user,
+                status=KidsHomeworkSubmission.Status.STUDENT_DONE,
+            )
+            .select_related("student", "homework", "homework__kids_class", "homework__created_by")
+            .prefetch_related("homework__attachments")
+            .order_by("-student_done_at", "-updated_at")
+        )
+        return Response(KidsHomeworkSubmissionSerializer(qs, many=True, context={"request": request}).data)
+
+
+class KidsParentHomeworkSubmissionReviewView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsParent]
+
+    def patch(self, request, submission_id):
+        sub = (
+            KidsHomeworkSubmission.objects.filter(pk=submission_id)
+            .select_related("student", "homework", "homework__kids_class", "homework__created_by")
+            .prefetch_related("homework__attachments")
+            .first()
+        )
+        if not sub:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        if sub.student.parent_account_id != request.user.id:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        if sub.status != KidsHomeworkSubmission.Status.STUDENT_DONE:
+            return Response(
+                {"detail": "Önce öğrencinin 'yaptım' adımı gerekir."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        ser = KidsHomeworkParentReviewSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        approved = bool(ser.validated_data["approved"])
+        note = (ser.validated_data.get("note") or "").strip()
+        sub.status = (
+            KidsHomeworkSubmission.Status.PARENT_APPROVED
+            if approved
+            else KidsHomeworkSubmission.Status.PARENT_REJECTED
+        )
+        sub.parent_note = note
+        sub.parent_reviewed_at = timezone.now()
+        sub.parent_reviewed_by = request.user
+        sub.save(
+            update_fields=[
+                "status",
+                "parent_note",
+                "parent_reviewed_at",
+                "parent_reviewed_by",
+                "updated_at",
+            ]
+        )
+        if sub.status == KidsHomeworkSubmission.Status.PARENT_APPROVED:
+            sid = sub.pk
+            transaction.on_commit(lambda s=sid: notify_teacher_homework_parent_approved(s))
+        return Response(KidsHomeworkSubmissionSerializer(sub, context={"request": request}).data)
+
+
 class KidsAssignmentSubmissionsDetailView(KidsAuthenticatedMixin, APIView):
     """Tek proje + o projeye ait teslimler (öğretmen)."""
 
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def get(self, request, class_id, assignment_id):
-        if not KidsClass.objects.filter(pk=class_id, teacher=request.user).exists():
+        if not _teacher_can_access_class(request.user, class_id):
             return Response(status=status.HTTP_404_NOT_FOUND)
         assignment = KidsAssignment.objects.filter(pk=assignment_id, kids_class_id=class_id).first()
         if not assignment:
@@ -2201,7 +2996,7 @@ class KidsClassSubmissionListView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def get(self, request, class_id):
-        if not KidsClass.objects.filter(pk=class_id, teacher=request.user).exists():
+        if not _teacher_can_access_class(request.user, class_id):
             return Response(status=status.HTTP_404_NOT_FOUND)
         qs = (
             KidsSubmission.objects.filter(assignment__kids_class_id=class_id)
@@ -2239,6 +3034,7 @@ class KidsStudentDashboardView(KidsAuthenticatedMixin, APIView):
             )
             .filter(Q(submission_opens_at__isnull=True) | Q(submission_opens_at__lte=now))
             .select_related("kids_class")
+            .prefetch_related("kids_class__teacher_assignments__teacher")
             .order_by(F("submission_closes_at").asc(nulls_last=True), "id")
         )
         assignment_list = list(assignments_qs)
@@ -2602,7 +3398,7 @@ class KidsSubmissionReviewView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def patch(self, request, class_id, submission_id):
-        if not KidsClass.objects.filter(pk=class_id, teacher=request.user).exists():
+        if not _teacher_can_access_class(request.user, class_id):
             return Response(status=status.HTTP_404_NOT_FOUND)
         sub = (
             KidsSubmission.objects.filter(
@@ -2677,7 +3473,7 @@ class KidsSubmissionHighlightView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def patch(self, request, class_id, submission_id):
-        if not KidsClass.objects.filter(pk=class_id, teacher=request.user).exists():
+        if not _teacher_can_access_class(request.user, class_id):
             return Response(status=status.HTTP_404_NOT_FOUND)
         sub = (
             KidsSubmission.objects.filter(
@@ -2857,10 +3653,15 @@ class KidsConversationListCreateView(KidsAuthenticatedMixin, APIView):
                 )
             except (MainUser.DoesNotExist, TypeError, ValueError):
                 return Response({"detail": "Öğretmen bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
-            teaches_student = KidsClass.objects.filter(
-                teacher=teacher_user,
-                enrollments__student=student,
-            ).exists()
+            teaches_student = (
+                KidsClass.objects.filter(
+                    Q(teacher=teacher_user)
+                    | Q(teacher_assignments__teacher=teacher_user, teacher_assignments__is_active=True),
+                    enrollments__student=student,
+                )
+                .distinct()
+                .exists()
+            )
             if not teaches_student:
                 return Response(
                     {"detail": "Seçilen öğretmen bu öğrencinin sınıfında değil."},
@@ -2873,10 +3674,15 @@ class KidsConversationListCreateView(KidsAuthenticatedMixin, APIView):
                 return Response({"detail": "Öğrencinin bağlı veli hesabı yok."}, status=status.HTTP_400_BAD_REQUEST)
             teacher_user = actor
             if not is_kids_admin_user(actor):
-                teaches_student = KidsClass.objects.filter(
-                    teacher=actor,
-                    enrollments__student=student,
-                ).exists()
+                teaches_student = (
+                    KidsClass.objects.filter(
+                        Q(teacher=actor)
+                        | Q(teacher_assignments__teacher=actor, teacher_assignments__is_active=True),
+                        enrollments__student=student,
+                    )
+                    .distinct()
+                    .exists()
+                )
                 if not teaches_student:
                     return Response({"detail": "Bu öğrenci sizin sınıfınızda değil."}, status=status.HTTP_403_FORBIDDEN)
         else:
@@ -2891,7 +3697,14 @@ class KidsConversationListCreateView(KidsAuthenticatedMixin, APIView):
                 return Response({"detail": "Sınıf bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
             if not KidsEnrollment.objects.filter(kids_class=kids_class, student=student).exists():
                 return Response({"detail": "Öğrenci bu sınıfta değil."}, status=status.HTTP_400_BAD_REQUEST)
-            if teacher_user and kids_class.teacher_id != teacher_user.id:
+            if teacher_user and not (
+                kids_class.teacher_id == teacher_user.id
+                or KidsClassTeacher.objects.filter(
+                    kids_class=kids_class,
+                    teacher=teacher_user,
+                    is_active=True,
+                ).exists()
+            ):
                 return Response(
                     {"detail": "Sınıf ve öğretmen eşleşmiyor."},
                     status=status.HTTP_400_BAD_REQUEST,
@@ -2899,7 +3712,10 @@ class KidsConversationListCreateView(KidsAuthenticatedMixin, APIView):
         if kids_class is None:
             classes_for_student = KidsClass.objects.filter(enrollments__student=student)
             if teacher_user:
-                classes_for_student = classes_for_student.filter(teacher=teacher_user)
+                classes_for_student = classes_for_student.filter(
+                    Q(teacher=teacher_user)
+                    | Q(teacher_assignments__teacher=teacher_user, teacher_assignments__is_active=True)
+                ).distinct()
             kids_class = classes_for_student.order_by("-id").first()
         topic = (request.data.get("topic") or "").strip()[:200]
         conv, created = KidsConversation.objects.get_or_create(
@@ -3006,8 +3822,8 @@ def _announcement_query_for_user(u):
             | Q(scope=KidsAnnouncement.Scope.SCHOOL, school_id__in=school_ids)
         )
     # teacher
-    class_ids = KidsClass.objects.filter(teacher=u).values_list("id", flat=True)
-    school_ids = KidsClass.objects.filter(teacher=u).values_list("school_id", flat=True)
+    class_ids = _teacher_class_queryset(u).values_list("id", flat=True)
+    school_ids = _teacher_class_queryset(u).values_list("school_id", flat=True)
     return qs.filter(
         Q(target_role=KidsAnnouncement.TargetRole.ALL)
         | Q(target_role=KidsAnnouncement.TargetRole.TEACHER)
@@ -3051,7 +3867,10 @@ def _notify_announcement_targets(announcement: KidsAnnouncement, sender):
                 announcement=announcement,
             )
     if target in (KidsAnnouncement.TargetRole.ALL, KidsAnnouncement.TargetRole.TEACHER):
-        teachers = MainUser.objects.filter(kids_classes__id__in=class_ids).distinct()
+        teachers = MainUser.objects.filter(
+            Q(kids_classes_teaching__id__in=class_ids)
+            | Q(kids_class_assignments__kids_class_id__in=class_ids, kids_class_assignments__is_active=True)
+        ).distinct()
         for t in teachers:
             create_kids_notification(
                 recipient_user=t,
@@ -3066,7 +3885,9 @@ class KidsAnnouncementListCreateView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        qs = _announcement_query_for_user(request.user).select_related("kids_class", "school", "created_by")
+        qs = _announcement_query_for_user(request.user).select_related(
+            "kids_class", "school", "created_by"
+        ).prefetch_related("attachments")
         return Response(KidsAnnouncementSerializer(qs, many=True, context={"request": request}).data)
 
     def post(self, request):
@@ -3079,7 +3900,10 @@ class KidsAnnouncementListCreateView(KidsAuthenticatedMixin, APIView):
             ann.published_at = timezone.now()
             ann.save(update_fields=["published_at", "updated_at"])
             _notify_announcement_targets(ann, request.user)
-        return Response(KidsAnnouncementSerializer(ann).data, status=status.HTTP_201_CREATED)
+        ann = KidsAnnouncement.objects.select_related("kids_class", "school", "created_by").prefetch_related(
+            "attachments"
+        ).get(pk=ann.pk)
+        return Response(KidsAnnouncementSerializer(ann, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
 class KidsAnnouncementDetailView(KidsAuthenticatedMixin, APIView):
@@ -3100,7 +3924,66 @@ class KidsAnnouncementDetailView(KidsAuthenticatedMixin, APIView):
             ann.save(update_fields=["published_at", "updated_at"])
         if ann.is_published and not was_published:
             _notify_announcement_targets(ann, request.user)
-        return Response(KidsAnnouncementSerializer(ann).data)
+        ann = KidsAnnouncement.objects.select_related("kids_class", "school", "created_by").prefetch_related(
+            "attachments"
+        ).get(pk=ann.pk)
+        return Response(KidsAnnouncementSerializer(ann, context={"request": request}).data)
+
+
+class KidsAnnouncementAttachmentUploadView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, announcement_id):
+        if not is_main_user(request.user) or not is_kids_teacher_or_admin_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        ann = KidsAnnouncement.objects.filter(pk=announcement_id).first()
+        if not ann:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        ser = KidsAnnouncementAttachmentUploadSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        f = ser.validated_data["file"]
+        att = KidsAnnouncementAttachment.objects.create(
+            announcement=ann,
+            file=f,
+            original_name=(getattr(f, "name", "") or "")[:255],
+            content_type=(getattr(f, "content_type", "") or "")[:120],
+            size_bytes=int(getattr(f, "size", 0) or 0),
+        )
+        ann = KidsAnnouncement.objects.select_related("kids_class", "school", "created_by").prefetch_related(
+            "attachments"
+        ).get(pk=ann.pk)
+        return Response(
+            {
+                "attachment_id": att.id,
+                "announcement": KidsAnnouncementSerializer(ann, context={"request": request}).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class KidsAnnouncementAttachmentDetailView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, announcement_id, attachment_id):
+        if not is_main_user(request.user) or not is_kids_teacher_or_admin_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        ann = KidsAnnouncement.objects.filter(pk=announcement_id).first()
+        if not ann:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        att = KidsAnnouncementAttachment.objects.filter(pk=attachment_id, announcement_id=ann.pk).first()
+        if not att:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        # Fiziksel dosyayı da storage'dan temizle.
+        att.file.delete(save=False)
+        att.delete()
+        ann = KidsAnnouncement.objects.select_related("kids_class", "school", "created_by").prefetch_related(
+            "attachments"
+        ).get(pk=ann.pk)
+        return Response(
+            {
+                "announcement": KidsAnnouncementSerializer(ann, context={"request": request}).data,
+            }
+        )
 
 
 class KidsNotificationListView(KidsAuthenticatedMixin, generics.ListAPIView):
@@ -3377,7 +4260,7 @@ class KidsWeeklyChampionView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def get(self, request, class_id):
-        kids_class = KidsClass.objects.filter(pk=class_id, teacher=request.user).first()
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
         if not kids_class:
             return Response(status=status.HTTP_404_NOT_FOUND)
         start = timezone.now() - timedelta(days=7)

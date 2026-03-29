@@ -18,6 +18,8 @@ from .models import (
     KidsConversation,
     KidsEnrollment,
     KidsFCMDeviceToken,
+    KidsHomework,
+    KidsHomeworkSubmission,
     KidsMessage,
     KidsNotification,
     KidsSubmission,
@@ -51,6 +53,16 @@ def kids_notification_relative_path(
     if notification_type == KidsNotification.NotificationType.SUBMISSION_RECEIVED and submission:
         cid = submission.assignment.kids_class_id
         return _kids_app_path("ogretmen", "sinif", str(cid))
+    if notification_type == KidsNotification.NotificationType.NEW_HOMEWORK:
+        return _kids_app_path("ogrenci", "odevler")
+    if notification_type == KidsNotification.NotificationType.NEW_HOMEWORK_PARENT:
+        return _kids_app_path("veli", "panel")
+    if notification_type == KidsNotification.NotificationType.HOMEWORK_PARENT_REVIEW_REQUIRED:
+        return _kids_app_path("veli", "panel")
+    if notification_type == KidsNotification.NotificationType.HOMEWORK_PARENT_APPROVED_FOR_TEACHER:
+        return _kids_app_path("ogretmen", "odevler")
+    if notification_type == KidsNotification.NotificationType.HOMEWORK_TEACHER_REVIEWED:
+        return _kids_app_path("ogrenci", "odevler")
     if notification_type == KidsNotification.NotificationType.CHALLENGE_INVITE and challenge_invite:
         ch = challenge_invite.challenge_id
         if ch:
@@ -262,3 +274,139 @@ def notify_teacher_submission_received(submission_id: int) -> None:
         )
     except Exception:
         logger.exception("Kids submission_received notify failed submission=%s", submission_id)
+
+
+def notify_students_new_homework(homework_id: int) -> None:
+    try:
+        homework = KidsHomework.objects.select_related("kids_class", "kids_class__teacher").get(
+            pk=homework_id
+        )
+    except KidsHomework.DoesNotExist:
+        return
+    if not homework.is_published:
+        return
+    student_ids = KidsEnrollment.objects.filter(kids_class_id=homework.kids_class_id).values_list(
+        "student_id", flat=True
+    )
+    students = KidsUser.objects.filter(pk__in=student_ids, role=KidsUserRole.STUDENT)
+    teacher_user = homework.kids_class.teacher
+    class_name = homework.kids_class.name
+    msg = f"Yeni ödev: {homework.title} ({class_name})"
+    parent_children: dict[int, set[str]] = {}
+    for student in students:
+        try:
+            create_kids_notification(
+                recipient_student=student,
+                sender_user=teacher_user,
+                notification_type=KidsNotification.NotificationType.NEW_HOMEWORK,
+                message=msg,
+            )
+        except Exception:
+            logger.exception("Kids new_homework notify failed student=%s", student.pk)
+        parent_id = getattr(student, "parent_account_id", None)
+        if parent_id:
+            name = (student.full_name or "").strip() or student.email
+            parent_children.setdefault(parent_id, set()).add(name)
+    if parent_children:
+        parents = _MainUser.objects.filter(pk__in=parent_children.keys())
+        for parent in parents:
+            child_names = sorted(parent_children.get(parent.pk) or [])
+            if len(child_names) == 1:
+                parent_msg = f"{child_names[0]} için yeni ödev yayınlandı: {homework.title} ({class_name})"
+            else:
+                parent_msg = f"Çocukların için yeni ödev yayınlandı: {homework.title} ({class_name})"
+            try:
+                create_kids_notification(
+                    recipient_user=parent,
+                    sender_user=teacher_user,
+                    notification_type=KidsNotification.NotificationType.NEW_HOMEWORK_PARENT,
+                    message=parent_msg,
+                )
+            except Exception:
+                logger.exception("Kids new_homework parent notify failed parent=%s", parent.pk)
+
+
+def notify_parent_homework_review_required(submission_id: int) -> None:
+    try:
+        sub = KidsHomeworkSubmission.objects.select_related(
+            "student",
+            "homework",
+            "homework__kids_class",
+        ).get(pk=submission_id)
+    except KidsHomeworkSubmission.DoesNotExist:
+        return
+    parent = sub.student.parent_account
+    if not parent:
+        return
+    if sub.status != KidsHomeworkSubmission.Status.STUDENT_DONE:
+        return
+    student_label = sub.student.full_name or sub.student.email
+    msg = f"{student_label} ödevi tamamladı: {sub.homework.title}. Onayın bekleniyor."
+    try:
+        create_kids_notification(
+            recipient_user=parent,
+            sender_student=sub.student,
+            notification_type=KidsNotification.NotificationType.HOMEWORK_PARENT_REVIEW_REQUIRED,
+            message=msg,
+        )
+    except Exception:
+        logger.exception("Kids homework parent review notify failed submission=%s", submission_id)
+
+
+def notify_teacher_homework_parent_approved(submission_id: int) -> None:
+    try:
+        sub = KidsHomeworkSubmission.objects.select_related(
+            "student",
+            "homework",
+            "homework__kids_class",
+            "homework__kids_class__teacher",
+            "parent_reviewed_by",
+        ).get(pk=submission_id)
+    except KidsHomeworkSubmission.DoesNotExist:
+        return
+    if sub.status != KidsHomeworkSubmission.Status.PARENT_APPROVED:
+        return
+    teacher_user = sub.homework.kids_class.teacher
+    student_label = sub.student.full_name or sub.student.email
+    msg = f"{student_label} için veli ödevi onayladı: {sub.homework.title}."
+    try:
+        create_kids_notification(
+            recipient_user=teacher_user,
+            sender_user=sub.parent_reviewed_by,
+            notification_type=KidsNotification.NotificationType.HOMEWORK_PARENT_APPROVED_FOR_TEACHER,
+            message=msg,
+        )
+    except Exception:
+        logger.exception("Kids homework teacher notify failed submission=%s", submission_id)
+
+
+def notify_student_homework_teacher_reviewed(submission_id: int) -> None:
+    try:
+        sub = KidsHomeworkSubmission.objects.select_related(
+            "student",
+            "homework",
+            "homework__kids_class",
+            "homework__kids_class__teacher",
+            "teacher_reviewed_by",
+        ).get(pk=submission_id)
+    except KidsHomeworkSubmission.DoesNotExist:
+        return
+    if sub.status not in (
+        KidsHomeworkSubmission.Status.TEACHER_APPROVED,
+        KidsHomeworkSubmission.Status.TEACHER_REVISION,
+    ):
+        return
+    teacher = sub.teacher_reviewed_by or sub.homework.kids_class.teacher
+    if sub.status == KidsHomeworkSubmission.Status.TEACHER_APPROVED:
+        msg = f"Ödevin onaylandı: {sub.homework.title}."
+    else:
+        msg = f"Ödevin için düzeltme istendi: {sub.homework.title}."
+    try:
+        create_kids_notification(
+            recipient_student=sub.student,
+            sender_user=teacher,
+            notification_type=KidsNotification.NotificationType.HOMEWORK_TEACHER_REVIEWED,
+            message=msg,
+        )
+    except Exception:
+        logger.exception("Kids homework student notify failed submission=%s", submission_id)

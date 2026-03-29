@@ -11,6 +11,11 @@ urlpatterns = [
     path("auth/parent/verify-password/", views.KidsParentPasswordVerifyView.as_view()),
     path("auth/parent/switch-student/", views.KidsParentSwitchStudentView.as_view()),
     path("parent/children-overview/", views.KidsParentChildrenOverviewView.as_view()),
+    path("parent/homeworks/pending/", views.KidsParentHomeworkPendingListView.as_view()),
+    path(
+        "parent/homework-submissions/<int:submission_id>/review/",
+        views.KidsParentHomeworkSubmissionReviewView.as_view(),
+    ),
     path(
         "parent/game-policies/<int:student_id>/",
         views.KidsParentGamePolicyDetailView.as_view(),
@@ -30,6 +35,12 @@ urlpatterns = [
     ),
     path("admin/teachers/", views.KidsAdminTeacherListCreateView.as_view()),
     path("admin/teachers/<int:pk>/", views.KidsAdminTeacherDetailPatchView.as_view()),
+    path(
+        "admin/teachers/<int:pk>/resend-welcome/",
+        views.KidsAdminTeacherResendWelcomeView.as_view(),
+    ),
+    path("admin/subjects/", views.KidsAdminSubjectListCreateView.as_view()),
+    path("admin/subjects/<int:pk>/", views.KidsAdminSubjectDetailView.as_view()),
     path("admin/schools/", views.KidsAdminSchoolListCreateView.as_view()),
     path("admin/schools/<int:pk>/", views.KidsAdminSchoolDetailView.as_view()),
     path(
@@ -54,19 +65,42 @@ urlpatterns = [
     path("auth/invite-preview/", views.KidsInvitePreviewView.as_view()),
     path("schools/", views.KidsSchoolListCreateView.as_view()),
     path("schools/<int:pk>/", views.KidsSchoolDetailView.as_view()),
+    path("schools/<int:school_id>/classes-directory/", views.KidsSchoolClassDirectoryView.as_view()),
     path("meb-schools/provinces/", views.MebProvinceListView.as_view()),
     path("meb-schools/districts/", views.MebDistrictListView.as_view()),
     path("meb-schools/pick/", views.MebSchoolPickListView.as_view()),
     path("admin/meb-schools/manual/", views.MebSchoolManualCreateView.as_view()),
     path("classes/", views.KidsClassListCreateView.as_view()),
     path("classes/<int:class_id>/invite-link/", views.KidsClassInviteLinkCreateView.as_view()),
+    path("classes/<int:class_id>/self-join/", views.KidsClassSelfJoinView.as_view()),
     path("classes/<int:pk>/", views.KidsClassDetailView.as_view()),
+    path(
+        "classes/<int:class_id>/teachers/",
+        views.KidsClassTeacherListCreateView.as_view(),
+    ),
+    path(
+        "classes/<int:class_id>/teachers/<int:teacher_user_id>/",
+        views.KidsClassTeacherDetailView.as_view(),
+    ),
     path("classes/<int:class_id>/students/", views.KidsEnrollmentListView.as_view()),
     path(
         "classes/<int:class_id>/students/<int:pk>/",
         views.KidsEnrollmentDestroyView.as_view(),
     ),
     path("classes/<int:class_id>/assignments/", views.KidsAssignmentListCreateView.as_view()),
+    path("classes/<int:class_id>/homeworks/", views.KidsHomeworkListCreateView.as_view()),
+    path(
+        "classes/<int:class_id>/homeworks/<int:homework_id>/",
+        views.KidsHomeworkDetailPatchView.as_view(),
+    ),
+    path(
+        "classes/<int:class_id>/homeworks/<int:homework_id>/attachments/",
+        views.KidsHomeworkAttachmentUploadView.as_view(),
+    ),
+    path(
+        "classes/<int:class_id>/homeworks/<int:homework_id>/attachments/<int:attachment_id>/",
+        views.KidsHomeworkAttachmentDetailView.as_view(),
+    ),
     path(
         "classes/<int:class_id>/assignments/<int:assignment_id>/",
         views.KidsAssignmentDetailPatchView.as_view(),
@@ -76,6 +110,14 @@ urlpatterns = [
         views.KidsAssignmentSubmissionsDetailView.as_view(),
     ),
     path("classes/<int:class_id>/submissions/", views.KidsClassSubmissionListView.as_view()),
+    path(
+        "teacher/homeworks/submissions/inbox/",
+        views.KidsTeacherHomeworkInboxView.as_view(),
+    ),
+    path(
+        "teacher/homeworks/submissions/<int:submission_id>/review/",
+        views.KidsTeacherHomeworkSubmissionReviewView.as_view(),
+    ),
     path(
         "classes/<int:class_id>/submissions/<int:submission_id>/review/",
         views.KidsSubmissionReviewView.as_view(),
@@ -98,6 +140,11 @@ urlpatterns = [
     ),
     path("student/game-sessions/me/", views.KidsStudentGameSessionListView.as_view()),
     path("student/submissions/", views.KidsSubmissionCreateView.as_view()),
+    path("student/homeworks/", views.KidsStudentHomeworkListView.as_view()),
+    path(
+        "student/homework-submissions/<int:submission_id>/mark-done/",
+        views.KidsStudentHomeworkSubmissionMarkDoneView.as_view(),
+    ),
     path(
         "student/submissions/for-assignment/",
         views.KidsStudentSubmissionForAssignmentView.as_view(),
@@ -111,6 +158,14 @@ urlpatterns = [
     ),
     path("announcements/", views.KidsAnnouncementListCreateView.as_view()),
     path("announcements/<int:pk>/", views.KidsAnnouncementDetailView.as_view()),
+    path(
+        "announcements/<int:announcement_id>/attachments/",
+        views.KidsAnnouncementAttachmentUploadView.as_view(),
+    ),
+    path(
+        "announcements/<int:announcement_id>/attachments/<int:attachment_id>/",
+        views.KidsAnnouncementAttachmentDetailView.as_view(),
+    ),
     path(
         "student/upload-submission-image/",
         views.KidsStudentSubmissionImageUploadView.as_view(),
