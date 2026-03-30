@@ -126,6 +126,8 @@ def _validate_questions(payload: dict[str, Any]) -> dict[str, Any]:
             {
                 "order": i,
                 "stem": stem[:3000],
+                "topic": str(row.get("topic") or row.get("subject") or "").strip()[:120],
+                "subtopic": str(row.get("subtopic") or row.get("unit") or row.get("skill") or "").strip()[:160],
                 "choices": cleaned_choices,
                 "correct_choice_key": answer_key_raw,
                 "points": float(row.get("points") or 1.0),
@@ -150,7 +152,7 @@ def extract_test_from_images(files: list[Any]) -> dict[str, Any]:
             "text": (
                 "You are extracting Turkish multiple choice test questions from uploaded images. "
                 "Return ONLY valid JSON with this shape: "
-                '{"title":"...","instructions":"...","questions":[{"stem":"...","choices":[{"text":"..."},{"text":"..."}],"correct_choice_key":"A"}]}. '
+                '{"title":"...","instructions":"...","questions":[{"stem":"...","topic":"...","subtopic":"...","choices":[{"text":"..."},{"text":"..."}],"correct_choice_key":"A"}]}. '
                 "Rules: 2 to 5 choices per question, no markdown, no commentary."
             )
         }

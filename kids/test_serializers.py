@@ -30,6 +30,8 @@ class KidsTestExtractSerializer(serializers.Serializer):
 class KidsTestQuestionWriteSerializer(serializers.Serializer):
     order = serializers.IntegerField(min_value=1)
     stem = serializers.CharField(max_length=3000)
+    topic = serializers.CharField(max_length=120, required=False, allow_blank=True)
+    subtopic = serializers.CharField(max_length=160, required=False, allow_blank=True)
     choices = serializers.ListField(child=serializers.DictField(), min_length=2, max_length=5)
     correct_choice_key = serializers.CharField(max_length=8, allow_blank=True)
     points = serializers.FloatField(min_value=0.1, required=False, default=1.0)
@@ -54,6 +56,8 @@ class KidsTestQuestionWriteSerializer(serializers.Serializer):
         if correct_key and correct_key not in keys:
             raise serializers.ValidationError({"correct_choice_key": "Doğru şık anahtarı seçeneklerde bulunmalı."})
         attrs["correct_choice_key"] = correct_key
+        attrs["topic"] = str(attrs.get("topic") or "").strip()[:120]
+        attrs["subtopic"] = str(attrs.get("subtopic") or "").strip()[:160]
         return attrs
 
 
@@ -77,7 +81,7 @@ class KidsTestDistributeSerializer(serializers.Serializer):
 class KidsTestQuestionSerializer(serializers.ModelSerializer):
     class Meta:
         model = KidsTestQuestion
-        fields = ("id", "order", "stem", "choices", "correct_choice_key", "points")
+        fields = ("id", "order", "stem", "topic", "subtopic", "choices", "correct_choice_key", "points")
         read_only_fields = fields
 
 

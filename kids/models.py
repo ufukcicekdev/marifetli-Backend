@@ -967,6 +967,8 @@ class KidsTestQuestion(models.Model):
     )
     order = models.PositiveSmallIntegerField(default=1)
     stem = models.TextField(max_length=3000)
+    topic = models.CharField(max_length=120, blank=True, default="")
+    subtopic = models.CharField(max_length=160, blank=True, default="")
     choices = models.JSONField(default=list, blank=True)
     correct_choice_key = models.CharField(max_length=8)
     points = models.FloatField(default=1.0)
