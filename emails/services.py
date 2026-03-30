@@ -367,6 +367,72 @@ class EmailService:
         )
 
     @staticmethod
+    def send_kids_parent_new_test_email(
+        *,
+        to_email: str,
+        parent_name: str,
+        student_name: str,
+        class_name: str,
+        test_title: str,
+        teacher_name: str,
+        teacher_subject: str,
+        duration_text: str,
+        parent_panel_url: str,
+    ):
+        """Veliye yeni test yayınlandığında bilgilendirme e-postası gönderir."""
+        context = {
+            "parent_name": (parent_name or "").strip() or "Veli",
+            "student_name": (student_name or "").strip() or "Öğrenci",
+            "class_name": (class_name or "").strip() or "-",
+            "test_title": (test_title or "").strip() or "Yeni Test",
+            "teacher_name": (teacher_name or "").strip() or "Öğretmen",
+            "teacher_subject": (teacher_subject or "").strip() or "Sınıf Öğretmeni",
+            "duration_text": (duration_text or "").strip() or "Belirtilmedi",
+            "parent_panel_url": (parent_panel_url or "").strip(),
+        }
+        sent = EmailService.send_template_email(
+            recipient=to_email,
+            template_type="kids_parent_new_test",
+            context=context,
+        )
+        if sent is not None:
+            return sent
+
+        logger.warning(
+            "Email template 'kids_parent_new_test' bulunamadı; düz metin/HTML fallback kullanılıyor. "
+            "Şablon için: python manage.py populate_email_templates"
+        )
+
+        subject = f"Marifetli Kids — {context['test_title']} için yeni test"
+        html = (
+            f"<p>Merhaba {context['parent_name']},</p>"
+            f"<p><strong>{context['class_name']}</strong> sınıfı için yeni bir test yayınlandı.</p>"
+            f"<p><strong>Test:</strong> {context['test_title']}<br/>"
+            f"<strong>Öğretmen:</strong> {context['teacher_name']}<br/>"
+            f"<strong>Branş:</strong> {context['teacher_subject']}<br/>"
+            f"<strong>Süre:</strong> {context['duration_text']}<br/>"
+            f"<strong>Öğrenci:</strong> {context['student_name']}</p>"
+            f"<p>Detaylar: <a href=\"{context['parent_panel_url']}\">{context['parent_panel_url']}</a></p>"
+        )
+        text = (
+            f"Merhaba {context['parent_name']},\n\n"
+            f"{context['class_name']} sınıfı için yeni bir test yayınlandı.\n\n"
+            f"Test: {context['test_title']}\n"
+            f"Öğretmen: {context['teacher_name']}\n"
+            f"Branş: {context['teacher_subject']}\n"
+            f"Süre: {context['duration_text']}\n"
+            f"Öğrenci: {context['student_name']}\n\n"
+            f"Detaylar: {context['parent_panel_url']}\n"
+        )
+        return EmailService.send_email(
+            recipient=to_email,
+            subject=subject,
+            html_content=html,
+            text_content=text,
+            metadata={"kids_parent_new_test": True, "template_fallback": True},
+        )
+
+    @staticmethod
     def send_notification_email(user, subject, message, notification_type='general'):
         """Send general notification email"""
         context = {

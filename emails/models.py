@@ -14,6 +14,7 @@ class EmailTemplate(models.Model):
         ('comment_notification', 'Comment Notification'),
         ('follow_notification', 'Follow Notification'),
         ('kids_teacher_welcome', 'Marifetli Kids — Öğretmen hesabı (geçici şifre)'),
+        ('kids_parent_new_test', 'Marifetli Kids — Veliye yeni test bildirimi'),
     ]
     
     name = models.CharField(max_length=100, unique=True)

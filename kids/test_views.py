@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 import json
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Count, Q
 from django.utils import timezone
@@ -11,19 +12,23 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from emails.services import EmailService
 from .auth_utils import is_kids_admin_user, is_kids_student_user, is_kids_teacher_or_admin_user, is_main_user
 from .authentication import KidsJWTAuthentication
 from .models import (
     KidsClass,
     KidsClassTeacher,
     KidsEnrollment,
+    KidsNotification,
     KidsTest,
     KidsTestAnswer,
     KidsTestAttempt,
     KidsTestQuestion,
     KidsTestSourceImage,
+    KidsTeacherBranch,
     KidsUser,
 )
+from .notifications_service import create_kids_notification
 from .test_serializers import (
     KidsStudentTestListSerializer,
     KidsStudentTestSubmitSerializer,
@@ -64,6 +69,69 @@ def _score_out_of_100(total_correct: int, total_questions: int) -> float:
     if total_questions <= 0:
         return 0.0
     return (float(total_correct) / float(total_questions)) * 100.0
+
+
+def _notify_students_new_test(test_id: int, sender_user) -> None:
+    test = KidsTest.objects.select_related("kids_class").filter(pk=test_id).first()
+    if not test or test.status != KidsTest.Status.PUBLISHED:
+        return
+    student_ids = KidsEnrollment.objects.filter(kids_class_id=test.kids_class_id).values_list(
+        "student_id",
+        flat=True,
+    )
+    students = KidsUser.objects.filter(pk__in=student_ids).select_related("parent_account")
+    msg = f"Yeni test: {test.title} ({test.kids_class.name})"
+    teacher_name = (
+        f"{getattr(sender_user, 'first_name', '')} {getattr(sender_user, 'last_name', '')}".strip()
+        or getattr(sender_user, "email", "")
+        or "Öğretmen"
+    )
+    teacher_subject = (
+        KidsTeacherBranch.objects.filter(teacher_id=getattr(sender_user, "id", None))
+        .values_list("subject", flat=True)
+        .first()
+        or "Sınıf Öğretmeni"
+    )
+    duration_text = (
+        f"{int(test.duration_minutes)} dakika"
+        if test.duration_minutes and int(test.duration_minutes) > 0
+        else "Süre sınırı yok"
+    )
+    base = (getattr(settings, "FRONTEND_URL", "") or "").rstrip("/")
+    parent_panel_url = f"{base}/kids/veli/panel" if base else "/kids/veli/panel"
+    for student in students:
+        try:
+            create_kids_notification(
+                recipient_student=student,
+                sender_user=sender_user,
+                notification_type=KidsNotification.NotificationType.NEW_TEST,
+                message=msg,
+            )
+        except Exception:
+            pass
+
+        parent = getattr(student, "parent_account", None)
+        parent_email = (getattr(parent, "email", "") or "").strip()
+        if not parent_email:
+            continue
+        parent_name = (
+            f"{getattr(parent, 'first_name', '')} {getattr(parent, 'last_name', '')}".strip() or "Veli"
+        )
+        student_name = (student.full_name or "").strip() or student.email
+        try:
+            EmailService.send_kids_parent_new_test_email(
+                to_email=parent_email,
+                parent_name=parent_name,
+                student_name=student_name,
+                class_name=test.kids_class.name,
+                test_title=test.title,
+                teacher_name=teacher_name,
+                teacher_subject=teacher_subject,
+                duration_text=duration_text,
+                parent_panel_url=parent_panel_url,
+            )
+        except Exception:
+            continue
 
 
 class KidsTestExtractView(KidsAuthenticatedMixin, APIView):
@@ -153,6 +221,8 @@ class KidsClassTestListCreateView(KidsAuthenticatedMixin, APIView):
             .prefetch_related("questions", "source_images")
             .get(pk=row.pk)
         )
+        if row.status == KidsTest.Status.PUBLISHED:
+            transaction.on_commit(lambda rid=row.id, su=request.user: _notify_students_new_test(rid, su))
         return Response(KidsTestSerializer(row, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
@@ -236,6 +306,14 @@ class KidsTestDistributeView(KidsAuthenticatedMixin, APIView):
             .prefetch_related("questions", "source_images")
             .order_by("-created_at")
         )
+        if created_ids:
+            def _notify_created_tests(ids: list[int], sender_user) -> None:
+                for created_test_id in ids:
+                    _notify_students_new_test(created_test_id, sender_user)
+
+            transaction.on_commit(
+                lambda ids=list(created_ids), su=request.user: _notify_created_tests(ids, su)
+            )
         return Response(
             {
                 "created": KidsTestSerializer(rows, many=True, context={"request": request}).data,

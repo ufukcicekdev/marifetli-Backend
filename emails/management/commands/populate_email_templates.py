@@ -77,4 +77,26 @@ class Command(BaseCommand):
             },
         )
 
+        # Marifetli Kids — veliye yeni test bildirimi
+        EmailTemplate.objects.get_or_create(
+            template_type='kids_parent_new_test',
+            defaults={
+                'name': 'Marifetli Kids Veli Yeni Test Bildirimi',
+                'subject': 'Marifetli Kids — {test_title} için yeni test',
+                'html_content': 'emails/kids_parent_new_test_email.html',
+                'text_content': (
+                    'Merhaba {parent_name},\n\n'
+                    '{class_name} sınıfında yeni bir test yayınlandı.\n\n'
+                    'Test: {test_title}\n'
+                    'Öğretmen: {teacher_name}\n'
+                    'Branş: {teacher_subject}\n'
+                    'Süre: {duration_text}\n'
+                    'Öğrenci: {student_name}\n\n'
+                    'Detaylar için veli panelini ziyaret edin: {parent_panel_url}\n\n'
+                    'Marifetli Kids'
+                ),
+                'is_active': True,
+            },
+        )
+
         self.stdout.write(self.style.SUCCESS('Successfully populated email templates!'))

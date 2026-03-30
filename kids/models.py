@@ -1388,6 +1388,7 @@ class KidsNotification(models.Model):
 
     class NotificationType(models.TextChoices):
         NEW_ASSIGNMENT = "kids_new_assignment", "Yeni proje"
+        NEW_TEST = "kids_new_test", "Yeni test"
         SUBMISSION_RECEIVED = "kids_submission_received", "Proje teslimi"
         NEW_HOMEWORK = "kids_new_homework", "Yeni ödev"
         NEW_HOMEWORK_PARENT = "kids_new_homework_parent", "Yeni ödev (veli)"

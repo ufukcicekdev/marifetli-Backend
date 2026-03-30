@@ -50,6 +50,8 @@ def kids_notification_relative_path(
     """Next.js: `${pathPrefix}${action_path}` (örn. action_path=/ogrenci/proje/3)."""
     if notification_type == KidsNotification.NotificationType.NEW_ASSIGNMENT and assignment:
         return _kids_app_path("ogrenci", "proje", str(assignment.pk))
+    if notification_type == KidsNotification.NotificationType.NEW_TEST:
+        return _kids_app_path("ogrenci", "testler")
     if notification_type == KidsNotification.NotificationType.SUBMISSION_RECEIVED and submission:
         cid = submission.assignment.kids_class_id
         return _kids_app_path("ogretmen", "sinif", str(cid))

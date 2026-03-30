@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Marifetli Kids - Yeni Test Bildirimi</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f7f7fb;font-family:Arial,sans-serif;color:#1f2937;">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="padding:24px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" cellpadding="0" cellspacing="0" width="640" style="max-width:640px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+            <tr>
+              <td style="padding:20px 24px;background:#faf5ff;border-bottom:1px solid #ede9fe;">
+                <h1 style="margin:0;font-size:20px;line-height:1.3;color:#6d28d9;">Marifetli Kids - Yeni Test Bildirimi</h1>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:20px 24px;">
+                <p style="margin:0 0 12px 0;">Merhaba {{ parent_name }},</p>
+                <p style="margin:0 0 12px 0;">
+                  <strong>{{ class_name }}</strong> sınıfı için yeni bir test yayınlandı.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;margin:8px 0 16px 0;">
+                  <tr>
+                    <td style="padding:6px 0;color:#6b7280;width:170px;">Test</td>
+                    <td style="padding:6px 0;"><strong>{{ test_title }}</strong></td>
+                  </tr>
+                  <tr>
+                    <td style="padding:6px 0;color:#6b7280;">Öğretmen</td>
+                    <td style="padding:6px 0;">{{ teacher_name }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:6px 0;color:#6b7280;">Branş</td>
+                    <td style="padding:6px 0;">{{ teacher_subject }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:6px 0;color:#6b7280;">Süre</td>
+                    <td style="padding:6px 0;">{{ duration_text }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:6px 0;color:#6b7280;">Öğrenci</td>
+                    <td style="padding:6px 0;">{{ student_name }}</td>
+                  </tr>
+                </table>
+                <p style="margin:0 0 16px 0;">
+                  Detaylar ve takip için veli panelini kullanabilirsiniz:
+                </p>
+                <p style="margin:0;">
+                  <a href="{{ parent_panel_url }}" style="display:inline-block;padding:10px 14px;background:#7c3aed;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;">
+                    Veli Paneline Git
+                  </a>
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+ </html>
+
