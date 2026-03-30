@@ -897,6 +897,152 @@ class KidsChallengeInvite(models.Model):
         ]
 
 
+class KidsTest(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Taslak"
+        PUBLISHED = "published", "Yayında"
+        ARCHIVED = "archived", "Arşiv"
+
+    kids_class = models.ForeignKey(
+        KidsClass,
+        on_delete=models.CASCADE,
+        related_name="tests",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="kids_tests_created",
+    )
+    source_test = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="distributed_tests",
+    )
+    title = models.CharField(max_length=240)
+    instructions = models.TextField(blank=True)
+    duration_minutes = models.PositiveSmallIntegerField(null=True, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+        db_index=True,
+    )
+    published_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_tests"
+        ordering = ["-published_at", "-created_at"]
+
+
+class KidsTestSourceImage(models.Model):
+    test = models.ForeignKey(
+        KidsTest,
+        on_delete=models.CASCADE,
+        related_name="source_images",
+    )
+    image = models.ImageField(upload_to="kids_tests/source/")
+    page_order = models.PositiveSmallIntegerField(default=1)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "kids_test_source_images"
+        ordering = ["page_order", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["test", "page_order"],
+                name="kids_test_source_image_test_page_order_uniq",
+            ),
+        ]
+
+
+class KidsTestQuestion(models.Model):
+    test = models.ForeignKey(
+        KidsTest,
+        on_delete=models.CASCADE,
+        related_name="questions",
+    )
+    order = models.PositiveSmallIntegerField(default=1)
+    stem = models.TextField(max_length=3000)
+    choices = models.JSONField(default=list, blank=True)
+    correct_choice_key = models.CharField(max_length=8)
+    points = models.FloatField(default=1.0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_test_questions"
+        ordering = ["order", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["test", "order"],
+                name="kids_test_question_test_order_uniq",
+            ),
+        ]
+
+
+class KidsTestAttempt(models.Model):
+    test = models.ForeignKey(
+        KidsTest,
+        on_delete=models.CASCADE,
+        related_name="attempts",
+    )
+    student = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        related_name="test_attempts",
+        limit_choices_to={"role": KidsUserRole.STUDENT},
+    )
+    started_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    submitted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    auto_submitted = models.BooleanField(default=False)
+    score = models.FloatField(default=0)
+    total_questions = models.PositiveSmallIntegerField(default=0)
+    total_correct = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_test_attempts"
+        ordering = ["-submitted_at", "-started_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["test", "student"],
+                name="kids_test_attempt_test_student_uniq",
+            ),
+        ]
+
+
+class KidsTestAnswer(models.Model):
+    attempt = models.ForeignKey(
+        KidsTestAttempt,
+        on_delete=models.CASCADE,
+        related_name="answers",
+    )
+    question = models.ForeignKey(
+        KidsTestQuestion,
+        on_delete=models.CASCADE,
+        related_name="answers",
+    )
+    selected_choice_key = models.CharField(max_length=8, blank=True)
+    is_correct = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_test_answers"
+        ordering = ["question_id", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["attempt", "question"],
+                name="kids_test_answer_attempt_question_uniq",
+            ),
+        ]
+
+
 class KidsGame(models.Model):
     """Kids oyun kataloğu (MVP: iç oyunlar)."""
 
@@ -1104,6 +1250,23 @@ class KidsMessage(models.Model):
 
     class Meta:
         db_table = "kids_messages"
+        ordering = ["created_at", "id"]
+
+
+class KidsMessageAttachment(models.Model):
+    message = models.OneToOneField(
+        KidsMessage,
+        on_delete=models.CASCADE,
+        related_name="attachment",
+    )
+    file = models.FileField(upload_to="kids_messages/")
+    original_name = models.CharField(max_length=255, blank=True)
+    content_type = models.CharField(max_length=120, blank=True)
+    size_bytes = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "kids_message_attachments"
         ordering = ["created_at", "id"]
 
 

@@ -7,6 +7,8 @@ from datetime import timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db import transaction
@@ -58,6 +60,7 @@ from .models import (
     KidsHomeworkSubmission,
     KidsInvite,
     KidsMessage,
+    KidsMessageAttachment,
     KidsMessageReadState,
     KidsNotification,
     KidsParentGamePolicy,
@@ -111,6 +114,7 @@ from .serializers import (
     KidsFreestylePostSerializer,
     KidsInviteCreateSerializer,
     KidsInviteSerializer,
+    KidsMessageAttachmentUploadSerializer,
     KidsMessageSerializer,
     KidsGameSerializer,
     KidsGameSessionCompleteSerializer,
@@ -3588,7 +3592,10 @@ def _send_message_notifications(msg: KidsMessage) -> None:
         if sender_student
         else ((sender_user.first_name or "").strip() or sender_user.email if sender_user else "Sistem")
     )
-    body = f"{sender_label}: {msg.body[:120]}"
+    preview_text = (msg.body or "").strip()[:120]
+    if not preview_text and hasattr(msg, "attachment") and getattr(msg.attachment, "id", None):
+        preview_text = "Dosya paylaştı"
+    body = f"{sender_label}: {preview_text or 'Yeni mesaj'}"
     for kind, who in recipients:
         if kind == "student":
             KidsNotification.objects.filter(
@@ -3622,6 +3629,23 @@ def _send_message_notifications(msg: KidsMessage) -> None:
                 conversation=conv,
                 message_record=msg,
             )
+
+
+def _broadcast_conversation_message(request, msg: KidsMessage) -> None:
+    layer = get_channel_layer()
+    if layer is None:
+        return
+    payload = KidsMessageSerializer(msg, context={"request": request}).data
+    try:
+        async_to_sync(layer.group_send)(
+            f"kids_conv_{msg.conversation_id}",
+            {
+                "type": "message.new",
+                "message": payload,
+            },
+        )
+    except Exception:
+        logger.exception("Conversation message broadcast failed", extra={"conversation_id": msg.conversation_id})
 
 
 class KidsConversationListCreateView(KidsAuthenticatedMixin, APIView):
@@ -3769,7 +3793,11 @@ class KidsConversationMessageListCreateView(KidsAuthenticatedMixin, APIView):
         conv = _conversation_queryset_for_user(request.user).filter(pk=conversation_id).first()
         if not conv:
             return Response(status=status.HTTP_404_NOT_FOUND)
-        msgs = conv.messages.select_related("sender_student", "sender_user").order_by("created_at")
+        msgs = (
+            conv.messages.select_related("sender_student", "sender_user")
+            .prefetch_related("attachment")
+            .order_by("created_at")
+        )
         return Response(KidsMessageSerializer(msgs, many=True, context={"request": request}).data)
 
     def post(self, request, conversation_id):
@@ -3777,14 +3805,30 @@ class KidsConversationMessageListCreateView(KidsAuthenticatedMixin, APIView):
         if not conv:
             return Response(status=status.HTTP_404_NOT_FOUND)
         body = (request.data.get("body") or "").strip()
-        if not body:
-            return Response({"detail": "Mesaj metni zorunludur."}, status=status.HTTP_400_BAD_REQUEST)
+        file_obj = request.data.get("file")
+        if not body and not file_obj:
+            return Response({"detail": "Mesaj metni veya dosya zorunludur."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(body) > 4000:
+            return Response({"detail": "Mesaj en fazla 4000 karakter olabilir."}, status=status.HTTP_400_BAD_REQUEST)
+        validated_file = None
+        if file_obj:
+            file_ser = KidsMessageAttachmentUploadSerializer(data={"file": file_obj})
+            file_ser.is_valid(raise_exception=True)
+            validated_file = file_ser.validated_data["file"]
         msg = KidsMessage.objects.create(
             conversation=conv,
             sender_student=request.user if is_kids_student_user(request.user) else None,
             sender_user=request.user if is_main_user(request.user) else None,
             body=body[:4000],
         )
+        if validated_file is not None:
+            KidsMessageAttachment.objects.create(
+                message=msg,
+                file=validated_file,
+                original_name=(getattr(validated_file, "name", "") or "")[:255],
+                content_type=(getattr(validated_file, "content_type", "") or "")[:120],
+                size_bytes=int(getattr(validated_file, "size", 0) or 0),
+            )
         conv.last_message_at = msg.created_at
         conv.save(update_fields=["last_message_at", "updated_at"])
         if is_kids_student_user(request.user):
@@ -3800,6 +3844,12 @@ class KidsConversationMessageListCreateView(KidsAuthenticatedMixin, APIView):
                 defaults={"last_read_message": msg},
             )
         _send_message_notifications(msg)
+        msg = (
+            KidsMessage.objects.select_related("sender_student", "sender_user")
+            .prefetch_related("attachment")
+            .get(pk=msg.pk)
+        )
+        _broadcast_conversation_message(request, msg)
         return Response(KidsMessageSerializer(msg, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 

@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import challenge_views, views
+from . import challenge_views, test_views, views
 
 urlpatterns = [
     path("auth/login/", views.KidsLoginView.as_view()),
@@ -150,6 +150,18 @@ urlpatterns = [
         views.KidsStudentSubmissionForAssignmentView.as_view(),
     ),
     path("student/badges/roadmap/", views.KidsStudentRoadmapView.as_view()),
+    path("tests/extract/", test_views.KidsTestExtractView.as_view()),
+    path("tests/mine/", test_views.KidsMyCreatedTestListView.as_view()),
+    path("tests/<int:test_id>/distribute/", test_views.KidsTestDistributeView.as_view()),
+    path("classes/<int:class_id>/tests/", test_views.KidsClassTestListCreateView.as_view()),
+    path("tests/<int:test_id>/", test_views.KidsTestDetailView.as_view()),
+    path("student/tests/", test_views.KidsStudentTestListView.as_view()),
+    path("student/tests/<int:test_id>/start/", test_views.KidsStudentTestStartView.as_view()),
+    path("student/tests/<int:test_id>/submit/", test_views.KidsStudentTestSubmitView.as_view()),
+    path(
+        "classes/<int:class_id>/tests/<int:test_id>/report/",
+        test_views.KidsClassTestReportView.as_view(),
+    ),
     path("messages/", views.KidsConversationListCreateView.as_view()),
     path("messages/<int:pk>/", views.KidsConversationDetailView.as_view()),
     path(

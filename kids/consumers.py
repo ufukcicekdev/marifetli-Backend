@@ -220,6 +220,7 @@ class KidsConversationConsumer(AsyncJsonWebsocketConsumer):
             "sender_student": msg.sender_student_id,
             "sender_user": msg.sender_user_id,
             "body": msg.body,
+            "attachment": None,
             "edited_at": msg.edited_at.isoformat() if msg.edited_at else None,
             "created_at": msg.created_at.isoformat(),
         }

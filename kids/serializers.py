@@ -28,6 +28,7 @@ from .models import (
     KidsHomeworkSubmission,
     KidsInvite,
     KidsMessage,
+    KidsMessageAttachment,
     KidsMessageReadState,
     KidsNotification,
     KidsParentGamePolicy,
@@ -1264,6 +1265,8 @@ class KidsConversationSerializer(serializers.ModelSerializer):
 
 
 class KidsMessageSerializer(serializers.ModelSerializer):
+    attachment = serializers.SerializerMethodField()
+
     class Meta:
         model = KidsMessage
         fields = (
@@ -1272,10 +1275,46 @@ class KidsMessageSerializer(serializers.ModelSerializer):
             "sender_student",
             "sender_user",
             "body",
+            "attachment",
             "edited_at",
             "created_at",
         )
         read_only_fields = ("sender_student", "sender_user", "edited_at", "created_at")
+
+    def get_attachment(self, obj):
+        att = getattr(obj, "attachment", None)
+        if not att:
+            return None
+        file_url = _absolute_media_url(self.context.get("request"), att.file.url) if getattr(att, "file", None) else ""
+        return {
+            "id": att.id,
+            "url": file_url,
+            "original_name": att.original_name or "",
+            "content_type": att.content_type or "",
+            "size_bytes": int(att.size_bytes or 0),
+            "created_at": att.created_at.isoformat() if att.created_at else None,
+        }
+
+
+class KidsMessageAttachmentUploadSerializer(serializers.Serializer):
+    file = serializers.FileField(required=True)
+
+    def validate_file(self, value):
+        image_max_size = 10 * 1024 * 1024
+        document_max_size = 20 * 1024 * 1024
+        size = int(getattr(value, "size", 0) or 0)
+        content_type = str(getattr(value, "content_type", "") or "").lower()
+        file_name = str(getattr(value, "name", "") or "").lower()
+        is_image = content_type.startswith("image/") or file_name.endswith(
+            (".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg")
+        )
+        if size <= 0:
+            raise serializers.ValidationError("Dosya boş olamaz.")
+        if is_image and size > image_max_size:
+            raise serializers.ValidationError("Görsel dosyası en fazla 10 MB olabilir.")
+        if not is_image and size > document_max_size:
+            raise serializers.ValidationError("Döküman dosyası en fazla 20 MB olabilir.")
+        return value
 
 
 class KidsAnnouncementSerializer(serializers.ModelSerializer):
