@@ -2,6 +2,7 @@ from django import forms
 from django.contrib import admin
 
 from .models import (
+    KidsAchievementSettings,
     KidsAssignment,
     KidsChallenge,
     KidsChallengeInvite,
@@ -173,6 +174,12 @@ class KidsUserBadgeAdmin(admin.ModelAdmin):
     list_display = ("student", "key", "label", "earned_at")
     search_fields = ("key", "label", "student__email")
     raw_id_fields = ("student",)
+
+
+@admin.register(KidsAchievementSettings)
+class KidsAchievementSettingsAdmin(admin.ModelAdmin):
+    list_display = ("code", "weekly_certificate_target", "monthly_certificate_target", "updated_at")
+    search_fields = ("code",)
 
 
 @admin.register(KidsFreestylePost)

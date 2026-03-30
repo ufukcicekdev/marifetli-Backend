@@ -59,6 +59,7 @@ urlpatterns = [
         "admin/schools/<int:school_pk>/teachers/<int:teacher_user_id>/",
         views.KidsAdminSchoolTeacherRemoveView.as_view(),
     ),
+    path("admin/achievement-settings/", views.KidsAdminAchievementSettingsView.as_view()),
     path("config/", views.KidsAppConfigView.as_view()),
     path("profile/photo/", views.KidsProfilePhotoView.as_view()),
     path("auth/accept-invite/", views.KidsAcceptInviteView.as_view()),

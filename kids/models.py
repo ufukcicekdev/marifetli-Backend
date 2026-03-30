@@ -706,6 +706,27 @@ class KidsUserBadge(models.Model):
         return f"{self.student_id}:{self.key}"
 
 
+class KidsAchievementSettings(models.Model):
+    """
+    Öğrenci sertifika hedefleri (haftalık/aylık).
+    Admin panelden düzenlenir; dashboard fallback değerleri buradan okunur.
+    """
+
+    code = models.CharField(max_length=32, unique=True, default="default")
+    weekly_certificate_target = models.PositiveSmallIntegerField(default=2)
+    monthly_certificate_target = models.PositiveSmallIntegerField(default=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_achievement_settings"
+        verbose_name = "Kids sertifika ayarı"
+        verbose_name_plural = "Kids sertifika ayarları"
+
+    def __str__(self):
+        return f"{self.code} (haftalık={self.weekly_certificate_target}, aylık={self.monthly_certificate_target})"
+
+
 class KidsFreestylePost(models.Model):
     """Serbest kürsü: sınıf projelerinden bağımsız paylaşım (galeri)."""
 

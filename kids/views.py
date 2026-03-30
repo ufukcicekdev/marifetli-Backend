@@ -12,7 +12,7 @@ from channels.layers import get_channel_layer
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Count, F, Q
+from django.db.models import Count, F, Max, Q
 from django.utils import timezone
 from emails.services import EmailService
 from rest_framework import generics, status
@@ -55,6 +55,7 @@ from .models import (
     KidsGame,
     KidsGameProgress,
     KidsGameSession,
+    KidsAchievementSettings,
     KidsHomework,
     KidsHomeworkAttachment,
     KidsHomeworkSubmission,
@@ -3025,6 +3026,101 @@ class KidsClassSubmissionListView(KidsAuthenticatedMixin, APIView):
         return Response(ser.data)
 
 
+def _student_achievement_certificate(
+    *,
+    student: KidsUser,
+    period_key: str,
+    period_label: str,
+    title: str,
+    start_date,
+    target_count: int,
+) -> dict:
+    challenge_qs = KidsSubmission.objects.filter(
+        student=student,
+        teacher_review_valid=True,
+        teacher_reviewed_at__date__gte=start_date,
+    )
+    homework_qs = KidsHomeworkSubmission.objects.filter(
+        student=student,
+        status=KidsHomeworkSubmission.Status.TEACHER_APPROVED,
+        teacher_reviewed_at__date__gte=start_date,
+    )
+    challenge_count = int(challenge_qs.count())
+    homework_count = int(homework_qs.count())
+    total_count = challenge_count + homework_count
+    safe_target = max(1, int(target_count or 1))
+    progress_percent = min(100, int(round((float(total_count) / float(safe_target)) * 100.0)))
+    earned = total_count >= safe_target
+
+    challenge_last = challenge_qs.aggregate(ts=Max("teacher_reviewed_at")).get("ts")
+    homework_last = homework_qs.aggregate(ts=Max("teacher_reviewed_at")).get("ts")
+    last_earned_at = max([d for d in [challenge_last, homework_last] if d is not None], default=None)
+
+    if total_count >= safe_target * 2:
+        level = "gold"
+    elif total_count >= safe_target:
+        level = "silver"
+    elif total_count >= max(1, safe_target // 2):
+        level = "bronze"
+    else:
+        level = "starter"
+
+    if earned:
+        message = f"Tebrikler! {period_label.lower()} hedefini tamamladın."
+    else:
+        remain = max(0, safe_target - total_count)
+        message = f"Bu dönem sertifika için {remain} adım daha kaldı."
+
+    return {
+        "period_key": period_key,
+        "period_label": period_label,
+        "title": title,
+        "start_date": start_date.isoformat(),
+        "target_count": safe_target,
+        "challenge_count": challenge_count,
+        "homework_count": homework_count,
+        "total_count": total_count,
+        "progress_percent": progress_percent,
+        "earned": earned,
+        "level": level,
+        "message": message,
+        "last_earned_at": last_earned_at.isoformat() if last_earned_at else None,
+    }
+
+
+def _student_achievement_certificates(student: KidsUser) -> list[dict]:
+    settings_row, _ = KidsAchievementSettings.objects.get_or_create(
+        code="default",
+        defaults={
+            "weekly_certificate_target": 2,
+            "monthly_certificate_target": 6,
+        },
+    )
+    weekly_target = int(getattr(settings_row, "weekly_certificate_target", 2) or 2)
+    monthly_target = int(getattr(settings_row, "monthly_certificate_target", 6) or 6)
+    today = timezone.localdate()
+    week_start = today - timedelta(days=today.weekday())
+    month_start = today.replace(day=1)
+    return [
+        _student_achievement_certificate(
+            student=student,
+            period_key="weekly",
+            period_label="Haftalık",
+            title="Haftalık Başarı Sertifikası",
+            start_date=week_start,
+            target_count=weekly_target,
+        ),
+        _student_achievement_certificate(
+            student=student,
+            period_key="monthly",
+            period_label="Aylık",
+            title="Aylık Başarı Sertifikası",
+            start_date=month_start,
+            target_count=monthly_target,
+        ),
+    ]
+
+
 class KidsStudentDashboardView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated]
 
@@ -3077,6 +3173,83 @@ class KidsStudentDashboardView(KidsAuthenticatedMixin, APIView):
                         "student_submissions_by_assignment": sub_groups,
                     },
                 ).data,
+                "achievement_certificates": _student_achievement_certificates(request.user),
+            }
+        )
+
+
+class KidsAdminAchievementSettingsView(KidsAuthenticatedMixin, APIView):
+    authentication_classes = [KidsOrMainSiteStaffJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsKidsAdmin]
+
+    def get(self, request):
+        row, _ = KidsAchievementSettings.objects.get_or_create(
+            code="default",
+            defaults={
+                "weekly_certificate_target": 2,
+                "monthly_certificate_target": 6,
+            },
+        )
+        return Response(
+            {
+                "code": row.code,
+                "weekly_certificate_target": int(row.weekly_certificate_target or 2),
+                "monthly_certificate_target": int(row.monthly_certificate_target or 6),
+                "updated_at": row.updated_at,
+            }
+        )
+
+    def patch(self, request):
+        row, _ = KidsAchievementSettings.objects.get_or_create(
+            code="default",
+            defaults={
+                "weekly_certificate_target": 2,
+                "monthly_certificate_target": 6,
+            },
+        )
+        updates = []
+        if "weekly_certificate_target" in request.data:
+            try:
+                v = int(request.data.get("weekly_certificate_target"))
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Haftalık hedef sayı olmalıdır."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if v < 1 or v > 50:
+                return Response(
+                    {"detail": "Haftalık hedef 1-50 arasında olmalıdır."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            row.weekly_certificate_target = v
+            updates.append("weekly_certificate_target")
+        if "monthly_certificate_target" in request.data:
+            try:
+                v = int(request.data.get("monthly_certificate_target"))
+            except (TypeError, ValueError):
+                return Response(
+                    {"detail": "Aylık hedef sayı olmalıdır."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if v < 1 or v > 200:
+                return Response(
+                    {"detail": "Aylık hedef 1-200 arasında olmalıdır."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            row.monthly_certificate_target = v
+            updates.append("monthly_certificate_target")
+        if not updates:
+            return Response(
+                {"detail": "Güncellenecek alan yok."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        row.save(update_fields=[*updates, "updated_at"])
+        return Response(
+            {
+                "code": row.code,
+                "weekly_certificate_target": int(row.weekly_certificate_target),
+                "monthly_certificate_target": int(row.monthly_certificate_target),
+                "updated_at": row.updated_at,
             }
         )
 
