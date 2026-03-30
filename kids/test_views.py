@@ -60,6 +60,12 @@ def _student_test_queryset(user):
     return KidsTest.objects.filter(kids_class_id__in=class_ids, status=KidsTest.Status.PUBLISHED)
 
 
+def _score_out_of_100(total_correct: int, total_questions: int) -> float:
+    if total_questions <= 0:
+        return 0.0
+    return (float(total_correct) / float(total_questions)) * 100.0
+
+
 class KidsTestExtractView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated]
 
@@ -352,6 +358,14 @@ class KidsStudentTestStartView(KidsAuthenticatedMixin, APIView):
             student=request.user,
             defaults={"total_questions": row.questions.count()},
         )
+        if attempt.submitted_at:
+            normalized = _score_out_of_100(
+                int(attempt.total_correct or 0),
+                int(attempt.total_questions or row.questions.count() or 0),
+            )
+            if abs(float(attempt.score or 0) - normalized) > 1e-9:
+                attempt.score = normalized
+                attempt.save(update_fields=["score", "updated_at"])
         return Response(KidsTestAttemptSerializer(attempt).data)
 
 
@@ -368,6 +382,13 @@ class KidsStudentTestSubmitView(KidsAuthenticatedMixin, APIView):
         if not attempt:
             return Response({"detail": "Önce testi başlat."}, status=status.HTTP_400_BAD_REQUEST)
         if attempt.submitted_at:
+            normalized = _score_out_of_100(
+                int(attempt.total_correct or 0),
+                int(attempt.total_questions or row.questions.count() or 0),
+            )
+            if abs(float(attempt.score or 0) - normalized) > 1e-9:
+                attempt.score = normalized
+                attempt.save(update_fields=["score", "updated_at"])
             return Response(KidsTestAttemptSerializer(attempt).data)
         ser = KidsStudentTestSubmitSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
@@ -377,7 +398,6 @@ class KidsStudentTestSubmitView(KidsAuthenticatedMixin, APIView):
         if row.duration_minutes:
             timed_out = now >= attempt.started_at + timedelta(minutes=int(row.duration_minutes))
         question_rows = list(row.questions.all().order_by("order", "id"))
-        total_score = 0.0
         total_correct = 0
         with transaction.atomic():
             for q in question_rows:
@@ -385,16 +405,17 @@ class KidsStudentTestSubmitView(KidsAuthenticatedMixin, APIView):
                 is_correct = bool(selected) and selected == (q.correct_choice_key or "").strip().upper()
                 if is_correct:
                     total_correct += 1
-                    total_score += float(q.points or 0)
                 KidsTestAnswer.objects.create(
                     attempt=attempt,
                     question=q,
                     selected_choice_key=selected,
                     is_correct=is_correct,
                 )
+            total_questions = len(question_rows)
+            total_score = _score_out_of_100(total_correct, total_questions)
             attempt.submitted_at = now
             attempt.auto_submitted = bool(ser.validated_data.get("auto_submitted") or timed_out)
-            attempt.total_questions = len(question_rows)
+            attempt.total_questions = total_questions
             attempt.total_correct = total_correct
             attempt.score = total_score
             attempt.save(
@@ -430,11 +451,17 @@ class KidsClassTestReportView(KidsAuthenticatedMixin, APIView):
             .prefetch_related("answers")
             .order_by("-score", "submitted_at")
         )
+        all_questions = list(test.questions.all().order_by("order", "id"))
+        all_questions_count = len(all_questions)
         student_rows = []
         for at in attempts:
             student = student_map.get(at.student_id)
             if not student:
                 continue
+            normalized_score = _score_out_of_100(
+                int(at.total_correct or 0),
+                int(at.total_questions or all_questions_count),
+            )
             duration_seconds = None
             if at.submitted_at and at.started_at:
                 duration_seconds = max(
@@ -448,13 +475,12 @@ class KidsClassTestReportView(KidsAuthenticatedMixin, APIView):
                     "started_at": at.started_at,
                     "submitted_at": at.submitted_at,
                     "duration_seconds": duration_seconds,
-                    "score": at.score,
+                    "score": normalized_score,
                     "total_correct": at.total_correct,
                     "total_questions": at.total_questions,
                 }
             )
         question_stats = []
-        all_questions = list(test.questions.all().order_by("order", "id"))
         for q in all_questions:
             ans = KidsTestAnswer.objects.filter(attempt__test_id=test.id, question_id=q.id)
             total = ans.count()
@@ -468,15 +494,94 @@ class KidsClassTestReportView(KidsAuthenticatedMixin, APIView):
                     "success_rate": (correct / total) if total else 0,
                 }
             )
-        avg_score = (sum([a.score for a in attempts]) / len(attempts)) if attempts else 0
+        avg_score = (sum([s["score"] for s in student_rows]) / len(student_rows)) if student_rows else 0
         return Response(
             {
                 "test_id": test.id,
+                "class_name": kids_class.name,
                 "title": test.title,
                 "students_total": len(student_map),
                 "students_submitted": len(attempts),
                 "average_score": avg_score,
                 "students": student_rows,
                 "question_stats": question_stats,
+            }
+        )
+
+
+class KidsClassTestStudentReportView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, class_id, test_id, student_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        test = KidsTest.objects.filter(pk=test_id, kids_class_id=kids_class.id).first()
+        if not test:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        enrollment = (
+            KidsEnrollment.objects.filter(kids_class_id=kids_class.id, student_id=student_id)
+            .select_related("student")
+            .first()
+        )
+        if not enrollment:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        student = enrollment.student
+        attempt = (
+            KidsTestAttempt.objects.filter(test_id=test.id, student_id=student.id)
+            .prefetch_related("answers")
+            .first()
+        )
+        answer_by_question_id: dict[int, KidsTestAnswer] = {}
+        if attempt:
+            for ans in attempt.answers.all():
+                answer_by_question_id[ans.question_id] = ans
+        questions = []
+        for q in test.questions.all().order_by("order", "id"):
+            ans = answer_by_question_id.get(q.id)
+            questions.append(
+                {
+                    "question_id": q.id,
+                    "order": q.order,
+                    "stem": q.stem,
+                    "choices": q.choices,
+                    "correct_choice_key": q.correct_choice_key,
+                    "selected_choice_key": ans.selected_choice_key if ans else "",
+                    "is_correct": bool(ans.is_correct) if ans else False,
+                }
+            )
+
+        attempt_payload = None
+        if attempt:
+            duration_seconds = None
+            if attempt.submitted_at and attempt.started_at:
+                duration_seconds = max(
+                    0,
+                    int((attempt.submitted_at - attempt.started_at).total_seconds()),
+                )
+            total_questions = int(attempt.total_questions or len(questions))
+            total_correct = int(attempt.total_correct or 0)
+            attempt_payload = {
+                "started_at": attempt.started_at,
+                "submitted_at": attempt.submitted_at,
+                "duration_seconds": duration_seconds,
+                "auto_submitted": attempt.auto_submitted,
+                "total_questions": total_questions,
+                "total_correct": total_correct,
+                "score": _score_out_of_100(total_correct, total_questions),
+            }
+
+        return Response(
+            {
+                "test_id": test.id,
+                "class_name": kids_class.name,
+                "test_title": test.title,
+                "student": {
+                    "id": student.id,
+                    "name": f"{student.first_name} {student.last_name}".strip() or student.email,
+                },
+                "attempt": attempt_payload,
+                "questions": questions,
             }
         )

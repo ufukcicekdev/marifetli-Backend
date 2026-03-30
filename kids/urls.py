@@ -162,6 +162,10 @@ urlpatterns = [
         "classes/<int:class_id>/tests/<int:test_id>/report/",
         test_views.KidsClassTestReportView.as_view(),
     ),
+    path(
+        "classes/<int:class_id>/tests/<int:test_id>/students/<int:student_id>/report/",
+        test_views.KidsClassTestStudentReportView.as_view(),
+    ),
     path("messages/", views.KidsConversationListCreateView.as_view()),
     path("messages/<int:pk>/", views.KidsConversationDetailView.as_view()),
     path(
