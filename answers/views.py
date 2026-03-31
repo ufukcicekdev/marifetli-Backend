@@ -9,6 +9,8 @@ from rest_framework.exceptions import ValidationError
 from django.db.models import Q
 from django.contrib.auth import get_user_model
 from core.permissions import IsVerified
+from core.i18n_catalog import translate
+from core.i18n_resolve import language_from_user
 from .models import Answer, AnswerLike, AnswerReport
 from .serializers import AnswerSerializer, AnswerCreateSerializer, AnswerLikeSerializer, AnswerReportSerializer
 from reputation.prefetch import author_badges_prefetch
@@ -258,11 +260,13 @@ def mark_as_best_answer(request, pk):
         award_reputation(answer.author, 'best_answer_selected', content_object=answer, description='Cevabın en iyi seçildi')
         # Cevap sahibine bildirim
         from notifications.services import create_notification
+
+        _lang = language_from_user(answer.author)
         create_notification(
             answer.author,
             request.user,
             'best_answer',
-            f"{request.user.username} cevabını en iyi cevap olarak işaretledi",
+            translate(_lang, 'main.notif.best_answer', username=request.user.username),
             question=question,
             answer=answer,
         )

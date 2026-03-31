@@ -97,6 +97,9 @@ from users.models import KidsPortalRole
 from users.models import User as MainUser
 from users.utils import generate_verification_token
 
+from core.i18n_catalog import translate
+from core.i18n_resolve import language_for_kids_recipient, language_from_user
+
 from .serializers import (
     _absolute_media_url,
     KidsAnnouncementSerializer,
@@ -202,6 +205,7 @@ def _send_kids_teacher_welcome_email(
     to_email: str,
     first_name: str,
     temp_password: str,
+    language: str | None = None,
 ) -> tuple[bool, str | None]:
     login_url = _kids_login_abs_url("ogretmen")
     reset_hint_url = _kids_login_abs_url("ogretmen")
@@ -211,6 +215,7 @@ def _send_kids_teacher_welcome_email(
         temp_password=temp_password,
         login_url=login_url,
         reset_hint_url=reset_hint_url,
+        language=language,
     )
     if sent and getattr(sent, "status", None) == "sent":
         return True, None
@@ -1530,6 +1535,7 @@ class KidsAdminTeacherListCreateView(KidsAuthenticatedMixin, APIView):
             to_email=email,
             first_name=teacher.first_name,
             temp_password=temp_password,
+            language=language_from_user(teacher),
         )
         return Response(
             {
@@ -1625,6 +1631,7 @@ class KidsAdminTeacherResendWelcomeView(KidsAuthenticatedMixin, APIView):
             to_email=teacher.email,
             first_name=teacher.first_name or "",
             temp_password=temp_password,
+            language=language_from_user(teacher),
         )
         return Response(
             {
@@ -2560,6 +2567,7 @@ class KidsInviteCreateView(KidsAuthenticatedMixin, APIView):
                 class_name=kids_class.name,
                 teacher_display=teacher_display,
                 expires_days=days,
+                language=getattr(kids_class, "language", None) or None,
             )
             row = KidsInviteSerializer(invite).data
             row["signup_url"] = link
@@ -3818,16 +3826,24 @@ def _send_message_notifications(msg: KidsMessage) -> None:
     if conv.student_id and (not sender_student or conv.student_id != sender_student.id):
         recipients.append(("student", conv.student))
 
-    sender_label = (
-        sender_student.full_name
-        if sender_student
-        else ((sender_user.first_name or "").strip() or sender_user.email if sender_user else "Sistem")
-    )
-    preview_text = (msg.body or "").strip()[:120]
-    if not preview_text and hasattr(msg, "attachment") and getattr(msg.attachment, "id", None):
-        preview_text = "Dosya paylaştı"
-    body = f"{sender_label}: {preview_text or 'Yeni mesaj'}"
     for kind, who in recipients:
+        if kind == "student":
+            lang = language_for_kids_recipient(recipient_student=who, recipient_user=None)
+        else:
+            lang = language_for_kids_recipient(recipient_student=None, recipient_user=who)
+        sender_label = (
+            sender_student.full_name
+            if sender_student
+            else (
+                (sender_user.first_name or "").strip() or sender_user.email
+                if sender_user
+                else translate(lang, "kids.chat.system_sender")
+            )
+        )
+        preview_text = (msg.body or "").strip()[:120]
+        if not preview_text and hasattr(msg, "attachment") and getattr(msg.attachment, "id", None):
+            preview_text = translate(lang, "kids.chat.file_shared")
+        body = f"{sender_label}: {preview_text or translate(lang, 'kids.chat.new_message')}"
         if kind == "student":
             KidsNotification.objects.filter(
                 recipient_student=who,
@@ -4137,21 +4153,23 @@ def _notify_announcement_targets(announcement: KidsAnnouncement, sender):
     students = KidsUser.objects.filter(id__in=student_ids).distinct()
     if target in (KidsAnnouncement.TargetRole.ALL, KidsAnnouncement.TargetRole.STUDENT):
         for s in students:
+            lang = language_for_kids_recipient(recipient_student=s, recipient_user=None)
             create_kids_notification(
                 recipient_student=s,
                 sender_user=sender if is_main_user(sender) else None,
                 notification_type=KidsNotification.NotificationType.NEW_ANNOUNCEMENT,
-                message=f"Yeni duyuru: {announcement.title}",
+                message=translate(lang, "kids.notif.new_announcement", title=announcement.title),
                 announcement=announcement,
             )
     if target in (KidsAnnouncement.TargetRole.ALL, KidsAnnouncement.TargetRole.PARENT):
         parents = MainUser.objects.filter(kids_children_accounts__in=students).distinct()
         for p in parents:
+            lang = language_for_kids_recipient(recipient_student=None, recipient_user=p)
             create_kids_notification(
                 recipient_user=p,
                 sender_user=sender if is_main_user(sender) else None,
                 notification_type=KidsNotification.NotificationType.NEW_ANNOUNCEMENT,
-                message=f"Yeni duyuru: {announcement.title}",
+                message=translate(lang, "kids.notif.new_announcement", title=announcement.title),
                 announcement=announcement,
             )
     if target in (KidsAnnouncement.TargetRole.ALL, KidsAnnouncement.TargetRole.TEACHER):
@@ -4160,11 +4178,12 @@ def _notify_announcement_targets(announcement: KidsAnnouncement, sender):
             | Q(kids_class_assignments__kids_class_id__in=class_ids, kids_class_assignments__is_active=True)
         ).distinct()
         for t in teachers:
+            lang = language_for_kids_recipient(recipient_student=None, recipient_user=t)
             create_kids_notification(
                 recipient_user=t,
                 sender_user=sender if is_main_user(sender) else None,
                 notification_type=KidsNotification.NotificationType.NEW_ANNOUNCEMENT,
-                message=f"Yeni duyuru: {announcement.title}",
+                message=translate(lang, "kids.notif.new_announcement", title=announcement.title),
                 announcement=announcement,
             )
 

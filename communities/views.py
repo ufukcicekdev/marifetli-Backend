@@ -6,6 +6,8 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
 from core.permissions import IsVerified
+from core.i18n_catalog import translate
+from core.i18n_resolve import language_from_user
 from .models import (
     Community,
     CommunityMember,
@@ -156,7 +158,6 @@ class CommunityJoinView(APIView):
             # Sahip ve tüm modlara bildirim
             try:
                 from notifications.services import create_notification
-                message = f"{request.user.username} r/{community.slug} topluluğunuza katılmak istiyor."
                 recipients = [community.owner_id]
                 recipients.extend(
                     community.members.filter(role=MEMBER_ROLE_MOD).values_list('user_id', flat=True)
@@ -165,11 +166,18 @@ class CommunityJoinView(APIView):
                     if uid != request.user.pk:
                         from django.contrib.auth import get_user_model
                         U = get_user_model()
+                        _u = U.objects.get(pk=uid)
+                        _lang = language_from_user(_u)
                         create_notification(
-                            U.objects.get(pk=uid),
+                            _u,
                             request.user,
                             'community_join_request',
-                            message,
+                            translate(
+                                _lang,
+                                'main.notif.community_join_request',
+                                username=request.user.username,
+                                slug=community.slug,
+                            ),
                             community=community,
                         )
             except Exception:
@@ -403,8 +411,9 @@ class CommunityRemoveQuestionView(APIView):
         question.save(update_fields=['community'])
         if reason and author.pk != request.user.pk:
             from notifications.services import create_notification
-            msg = f"r/{community.slug} topluluğunda paylaştığınız bir gönderi topluluktan kaldırıldı."
+            _lang = language_from_user(author)
+            msg = translate(_lang, 'main.notif.community_post_removed', slug=community.slug)
             if reason:
-                msg += f" Sebep: {reason}"
+                msg += translate(_lang, 'main.notif.community_post_removed_reason_suffix', reason=reason)
             create_notification(author, request.user, 'community_post_removed', msg, question=question, community=community)
         return Response({'detail': 'Gönderi topluluktan kaldırıldı.'}, status=status.HTTP_200_OK)

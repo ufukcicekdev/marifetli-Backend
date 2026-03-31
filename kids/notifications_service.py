@@ -8,6 +8,8 @@ from django.conf import settings
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 
+from core.i18n_catalog import translate
+from core.i18n_resolve import language_for_kids_recipient
 from notifications.services import deliver_fcm_push_tokens
 
 from .models import (
@@ -191,6 +193,14 @@ def create_kids_notification(
         recipient_user=recipient_user,
     )
     if tokens:
+        _fb = None
+        if assignment and getattr(assignment, "kids_class", None):
+            _fb = getattr(assignment.kids_class, "language", None)
+        _lang = language_for_kids_recipient(
+            recipient_student=recipient_student,
+            recipient_user=recipient_user,
+            fallback_lang=_fb,
+        )
         click_url = kids_notification_absolute_url(
             notification_type,
             assignment=assignment,
@@ -203,7 +213,7 @@ def create_kids_notification(
         try:
             deliver_fcm_push_tokens(
                 list(tokens),
-                title="Marifetli Kids",
+                title=translate(_lang, "kids.push.app_title"),
                 body=message,
                 data={"click_url": click_url} if click_url else None,
                 invalidate_token=_kids_push_invalidate,
@@ -233,9 +243,15 @@ def notify_students_new_assignment(assignment_id: int) -> None:
         ).values_list("student_id", flat=True)
         students = KidsUser.objects.filter(pk__in=student_ids, role=KidsUserRole.STUDENT)
         teacher_user = assignment.kids_class.teacher
-        msg = f"Yeni proje: {assignment.title} ({class_name})"
         for student in students:
             try:
+                _lang = language_for_kids_recipient(recipient_student=student, recipient_user=None)
+                msg = translate(
+                    _lang,
+                    "kids.notif.new_assignment",
+                    title=assignment.title,
+                    class_name=class_name,
+                )
                 create_kids_notification(
                     recipient_student=student,
                     sender_user=teacher_user,
@@ -264,7 +280,13 @@ def notify_teacher_submission_received(submission_id: int) -> None:
         return
     teacher_user = sub.assignment.kids_class.teacher
     student_label = sub.student.full_name or sub.student.email
-    msg = f"{student_label} projesini teslim etti: {sub.assignment.title}"
+    _lang = language_for_kids_recipient(recipient_student=None, recipient_user=teacher_user)
+    msg = translate(
+        _lang,
+        "kids.notif.submission_received",
+        student=student_label,
+        title=sub.assignment.title,
+    )
     try:
         create_kids_notification(
             recipient_user=teacher_user,
@@ -293,10 +315,16 @@ def notify_students_new_homework(homework_id: int) -> None:
     students = KidsUser.objects.filter(pk__in=student_ids, role=KidsUserRole.STUDENT)
     teacher_user = homework.kids_class.teacher
     class_name = homework.kids_class.name
-    msg = f"Yeni ödev: {homework.title} ({class_name})"
     parent_children: dict[int, set[str]] = {}
     for student in students:
         try:
+            _lang = language_for_kids_recipient(recipient_student=student, recipient_user=None)
+            msg = translate(
+                _lang,
+                "kids.notif.new_homework",
+                title=homework.title,
+                class_name=class_name,
+            )
             create_kids_notification(
                 recipient_student=student,
                 sender_user=teacher_user,
@@ -313,10 +341,22 @@ def notify_students_new_homework(homework_id: int) -> None:
         parents = _MainUser.objects.filter(pk__in=parent_children.keys())
         for parent in parents:
             child_names = sorted(parent_children.get(parent.pk) or [])
+            _lang = language_for_kids_recipient(recipient_student=None, recipient_user=parent)
             if len(child_names) == 1:
-                parent_msg = f"{child_names[0]} için yeni ödev yayınlandı: {homework.title} ({class_name})"
+                parent_msg = translate(
+                    _lang,
+                    "kids.notif.new_homework_parent_one",
+                    child=child_names[0],
+                    title=homework.title,
+                    class_name=class_name,
+                )
             else:
-                parent_msg = f"Çocukların için yeni ödev yayınlandı: {homework.title} ({class_name})"
+                parent_msg = translate(
+                    _lang,
+                    "kids.notif.new_homework_parent_multi",
+                    title=homework.title,
+                    class_name=class_name,
+                )
             try:
                 create_kids_notification(
                     recipient_user=parent,
@@ -343,7 +383,13 @@ def notify_parent_homework_review_required(submission_id: int) -> None:
     if sub.status != KidsHomeworkSubmission.Status.STUDENT_DONE:
         return
     student_label = sub.student.full_name or sub.student.email
-    msg = f"{student_label} ödevi tamamladı: {sub.homework.title}. Onayın bekleniyor."
+    _lang = language_for_kids_recipient(recipient_student=None, recipient_user=parent)
+    msg = translate(
+        _lang,
+        "kids.notif.homework_review_required",
+        student=student_label,
+        title=sub.homework.title,
+    )
     try:
         create_kids_notification(
             recipient_user=parent,
@@ -370,7 +416,13 @@ def notify_teacher_homework_parent_approved(submission_id: int) -> None:
         return
     teacher_user = sub.homework.kids_class.teacher
     student_label = sub.student.full_name or sub.student.email
-    msg = f"{student_label} için veli ödevi onayladı: {sub.homework.title}."
+    _lang = language_for_kids_recipient(recipient_student=None, recipient_user=teacher_user)
+    msg = translate(
+        _lang,
+        "kids.notif.homework_parent_approved",
+        student=student_label,
+        title=sub.homework.title,
+    )
     try:
         create_kids_notification(
             recipient_user=teacher_user,
@@ -399,10 +451,11 @@ def notify_student_homework_teacher_reviewed(submission_id: int) -> None:
     ):
         return
     teacher = sub.teacher_reviewed_by or sub.homework.kids_class.teacher
+    _lang = language_for_kids_recipient(recipient_student=sub.student, recipient_user=None)
     if sub.status == KidsHomeworkSubmission.Status.TEACHER_APPROVED:
-        msg = f"Ödevin onaylandı: {sub.homework.title}."
+        msg = translate(_lang, "kids.notif.homework_teacher_approved", title=sub.homework.title)
     else:
-        msg = f"Ödevin için düzeltme istendi: {sub.homework.title}."
+        msg = translate(_lang, "kids.notif.homework_teacher_revision", title=sub.homework.title)
     try:
         create_kids_notification(
             recipient_student=sub.student,

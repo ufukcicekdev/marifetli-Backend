@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="{{ html_lang }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Marifetli Bildirim</title>
+    <title>{{ email_i18n.page_title }}</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -20,16 +20,8 @@
             padding: 30px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
-        .header {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        .logo {
-            font-size: 28px;
-            font-weight: bold;
-            color: #f97316;
-            margin-bottom: 10px;
-        }
+        .header { text-align: center; margin-bottom: 30px; }
+        .logo { font-size: 28px; font-weight: bold; color: #f97316; margin-bottom: 10px; }
         .welcome-box {
             background: linear-gradient(135deg, #f97316 0%, #fb923c 100%);
             color: white;
@@ -55,9 +47,6 @@
             font-weight: bold;
             margin: 20px 0;
             text-align: center;
-        }
-        .button:hover {
-            background-color: #ea580c;
         }
         .footer {
             margin-top: 30px;
@@ -93,35 +82,35 @@
             {% else %}
             <div class="logo">🦉 Marifetli</div>
             {% endif %}
-            <h1>Bildirim</h1>
+            <h1>{{ email_i18n.h1 }}</h1>
         </div>
 
         <div class="welcome-box">
-            <h2>Merhaba {{ user.username }}! 👋</h2>
-            <p>Marifetli'de sizin için yeni bir bildirim var.</p>
+            <h2>{{ email_i18n.welcome_title }}</h2>
+            <p>{{ email_i18n.welcome_p }}</p>
         </div>
 
         {% if notification_type %}
-        <span class="notification-type">{{ notification_type }}</span>
+        <span class="notification-type">{{ notification_type_label }}</span>
         {% endif %}
-        
+
         <div class="notification-box">
             <p style="margin: 0; font-size: 16px;">{{ message }}</p>
         </div>
-        
-        <p>Detaylar için Marifetli'yi ziyaret edebilirsiniz.</p>
-        
+
+        <p>{{ email_i18n.details_p }}</p>
+
         <div style="text-align: center;">
-            <a href="{{ frontend_url }}" class="button">Marifetli'ye Git</a>
+            <a href="{{ frontend_url }}" class="button">{{ email_i18n.cta }}</a>
         </div>
-        
-        <p>Sorularınız için bizimle iletişime geçebilirsiniz.</p>
-        
-        <p>Sevgiler,<br>Marifetli Ekibi</p>
-        
+
+        <p>{{ email_i18n.contact_p }}</p>
+
+        <p>{{ email_i18n.closing|safe }}</p>
+
         <div class="footer">
-            <p>Bu email bir bildirim için gönderilmiştir.</p>
-            <p>&copy; 2026 Marifetli. Tüm hakları saklıdır.</p>
+            <p>{{ email_i18n.footer1 }}</p>
+            <p>{{ email_i18n.footer2 }}</p>
         </div>
     </div>
 </body>

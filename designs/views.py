@@ -4,6 +4,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.exceptions import PermissionDenied
 from django.contrib.auth import get_user_model
 from core.permissions import IsVerified
+from core.i18n_catalog import translate
+from core.i18n_resolve import language_from_user
 from .models import Design, DesignLike, DesignComment
 from .serializers import (
     DesignUploadSerializer,
@@ -123,11 +125,12 @@ class DesignLikeView(generics.CreateAPIView):
 
         if design.author_id != self.request.user.id:
             from notifications.services import create_notification
+            _lang = language_from_user(design.author)
             create_notification(
                 design.author,
                 self.request.user,
                 "like_design",
-                f"{self.request.user.username} tasarımını beğendi",
+                translate(_lang, "main.notif.like_design", username=self.request.user.username),
                 design=design,
             )
 
@@ -186,10 +189,11 @@ class DesignCommentsView(generics.ListCreateAPIView):
 
         if design.author_id != self.request.user.id:
             from notifications.services import create_notification
+            _lang = language_from_user(design.author)
             create_notification(
                 design.author,
                 self.request.user,
                 "comment_design",
-                f"{self.request.user.username} tasarımına yorum yaptı",
+                translate(_lang, "main.notif.comment_design", username=self.request.user.username),
                 design=design,
             )

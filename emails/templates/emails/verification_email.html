@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="{{ html_lang }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>E-posta Doğrulama - Marifetli</title>
+    <title>{{ email_i18n.page_title }}</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -107,41 +107,41 @@
             {% else %}
             <div class="logo">🦉 Marifetli</div>
             {% endif %}
-            <h1>E-posta Adresinizi Doğrulayın</h1>
+            <h1>{{ email_i18n.h1 }}</h1>
         </div>
 
         <div class="welcome-box">
-            <h2>Merhaba {{ user.username }}! 👋</h2>
-            <p>E-posta adresinizi doğrulayarak hesabınızı etkinleştirin.</p>
+            <h2>{{ email_i18n.welcome_title }}</h2>
+            <p>{{ email_i18n.welcome_p }}</p>
         </div>
 
-        <p>Marifetli'ye kayıt olduğunuz için teşekkürler! Aşağıdaki butona tıklayarak e-postanızı doğruladıktan sonra:</p>
+        <p>{{ email_i18n.intro_p }}</p>
 
         <div class="feature-list">
             <ul>
-                <li><strong>Gönderi paylaşabilir</strong> ve topluluğa içerik ekleyebilirsiniz</li>
-                <li><strong>Yorum yapabilir</strong> ve diğer üyelerle etkileşime geçebilirsiniz</li>
-                <li><strong>Beğeni verebilir</strong> ve içerikleri değerlendirebilirsiniz</li>
+                <li><strong>{{ email_i18n.feature1 }}</strong></li>
+                <li><strong>{{ email_i18n.feature2 }}</strong></li>
+                <li><strong>{{ email_i18n.feature3 }}</strong></li>
             </ul>
         </div>
 
-        <p>Hemen e-postanızı doğrulayın:</p>
+        <p>{{ email_i18n.lead_button }}</p>
 
         <div style="text-align: center;">
-            <a href="{{ verification_url }}" class="button">E-postamı Doğrula</a>
+            <a href="{{ verification_url }}" class="button">{{ email_i18n.cta }}</a>
         </div>
 
-        <p>Buton çalışmazsa aşağıdaki bağlantıyı kopyalayıp tarayıcınıza yapıştırabilirsiniz:</p>
+        <p>{{ email_i18n.alt_link }}</p>
         <div class="url-box">{{ verification_url }}</div>
-        <p style="font-size: 12px; color: #666;">Bu bağlantı güvenliğiniz için sınırlı süre geçerlidir.</p>
+        <p style="font-size: 12px; color: #666;">{{ email_i18n.expiry_note }}</p>
 
-        <p>Bu işlemi siz başlatmadıysanız bu e-postayı görmezden gelebilirsiniz.</p>
+        <p>{{ email_i18n.ignore_note }}</p>
 
-        <p>Sevgiler,<br>Marifetli Ekibi</p>
+        <p>{{ email_i18n.closing|safe }}</p>
 
         <div class="footer">
-            <p>Bu e-posta, Marifetli hesabınız için e-posta doğrulama isteği üzerine gönderildi.</p>
-            <p>&copy; 2026 Marifetli. Tüm hakları saklıdır.</p>
+            <p>{{ email_i18n.footer1 }}</p>
+            <p>{{ email_i18n.footer2 }}</p>
         </div>
     </div>
 </body>

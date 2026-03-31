@@ -9,6 +9,9 @@ from celery import shared_task
 from django.db.models import Q
 from django.utils import timezone
 
+from core.i18n_catalog import translate
+from core.i18n_resolve import language_for_kids_recipient
+
 from kids.models import KidsAssignment, KidsEnrollment, KidsNotification, KidsUser, KidsUserRole
 from kids.notifications_service import create_kids_notification, notify_students_new_assignment
 
@@ -56,19 +59,26 @@ def notify_kids_assignments_due_soon(hours_before: int = 24):
             )
             students = KidsUser.objects.filter(pk__in=student_ids, role=KidsUserRole.STUDENT)
             for student in students:
+                lang_s = language_for_kids_recipient(recipient_student=student)
                 create_kids_notification(
                     recipient_student=student,
                     sender_user=assignment.kids_class.teacher,
                     notification_type=KidsNotification.NotificationType.ASSIGNMENT_DUE_SOON,
-                    message=f"Son teslim yaklaşıyor: {assignment.title}",
+                    message=translate(lang_s, "kids.notif.due_soon", title=assignment.title),
                     assignment=assignment,
                 )
                 if student.parent_account_id:
+                    lang_p = language_for_kids_recipient(recipient_user=student.parent_account)
                     create_kids_notification(
                         recipient_user=student.parent_account,
                         sender_user=assignment.kids_class.teacher,
                         notification_type=KidsNotification.NotificationType.ASSIGNMENT_DUE_SOON,
-                        message=f"{student.full_name or student.email} için son teslim yaklaşıyor: {assignment.title}",
+                        message=translate(
+                            lang_p,
+                            "kids.notif.due_soon_parent",
+                            student=student.full_name or student.email,
+                            title=assignment.title,
+                        ),
                         assignment=assignment,
                     )
             assignment.due_soon_notified_at = now

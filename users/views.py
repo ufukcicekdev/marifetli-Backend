@@ -17,6 +17,8 @@ from core.permissions import IsVerified
 from .models import UserProfile, Follow, UserNotificationPreference
 from .serializers import UserSerializer, UserProfileSerializer, FollowSerializer, UserNotificationPreferenceSerializer
 from emails.services import EmailService
+from core.i18n_catalog import translate
+from core.i18n_resolve import language_from_user
 from users.utils import generate_verification_token
 import logging
 
@@ -355,11 +357,13 @@ class FollowUserView(generics.CreateAPIView):
         User.objects.filter(pk=follow.following_id).update(followers_count=F('followers_count') + 1)
         # Takip edilen kullanıcıya bildirim
         from notifications.services import create_notification
+
+        _lang = language_from_user(follow.following)
         create_notification(
             follow.following,
             self.request.user,
             'follow',
-            f"{self.request.user.username} seni takip etmeye başladı",
+            translate(_lang, 'main.notif.follow', username=self.request.user.username),
         )
         # Takipçi sayısına göre başarı (Popüler 10)
         followers_count = Follow.objects.filter(following=follow.following).count()

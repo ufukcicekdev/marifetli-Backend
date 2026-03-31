@@ -16,6 +16,9 @@ from .models import (
     KidsNotification,
     KidsUser,
 )
+from core.i18n_catalog import translate
+from core.i18n_resolve import language_for_kids_recipient
+
 from .notifications_service import create_kids_notification
 
 
@@ -176,40 +179,49 @@ class KidsConversationConsumer(AsyncJsonWebsocketConsumer):
 
         sender_main_id = sender_user.id if sender_user else None
         sender_student_id = sender_student.id if sender_student else None
-        sender_label = (
-            sender_student.full_name
-            if sender_student
-            else ((sender_user.first_name or "").strip() or sender_user.email if sender_user else "Sistem")
-        )
-        preview = f"{sender_label}: {body[:120]}"
+
+        def _preview_for(lang: str) -> str:
+            sender_label = (
+                sender_student.full_name
+                if sender_student
+                else (
+                    (sender_user.first_name or "").strip() or sender_user.email
+                    if sender_user
+                    else translate(lang, "kids.chat.system_sender")
+                )
+            )
+            return f"{sender_label}: {body[:120]}"
 
         if conv.teacher_user_id and conv.teacher_user_id != sender_main_id:
+            _lang = language_for_kids_recipient(recipient_student=None, recipient_user=conv.teacher_user)
             create_kids_notification(
                 recipient_user=conv.teacher_user,
                 sender_student=sender_student,
                 sender_user=sender_user,
                 notification_type=KidsNotification.NotificationType.NEW_MESSAGE,
-                message=preview,
+                message=_preview_for(_lang),
                 conversation=conv,
                 message_record=msg,
             )
         if conv.parent_user_id and conv.parent_user_id != sender_main_id:
+            _lang = language_for_kids_recipient(recipient_student=None, recipient_user=conv.parent_user)
             create_kids_notification(
                 recipient_user=conv.parent_user,
                 sender_student=sender_student,
                 sender_user=sender_user,
                 notification_type=KidsNotification.NotificationType.NEW_MESSAGE,
-                message=preview,
+                message=_preview_for(_lang),
                 conversation=conv,
                 message_record=msg,
             )
         if conv.student_id and conv.student_id != sender_student_id:
+            _lang = language_for_kids_recipient(recipient_student=conv.student, recipient_user=None)
             create_kids_notification(
                 recipient_student=conv.student,
                 sender_student=sender_student,
                 sender_user=sender_user,
                 notification_type=KidsNotification.NotificationType.NEW_MESSAGE,
-                message=preview,
+                message=_preview_for(_lang),
                 conversation=conv,
                 message_record=msg,
             )

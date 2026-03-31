@@ -33,15 +33,24 @@ def on_question_created(sender, instance, created, **kwargs):
         # Takip edenlere bildirim: "X yeni gönderi paylaştı"
         from users.models import Follow
         from notifications.services import create_notification
+        from core.i18n_catalog import translate
+        from core.i18n_resolve import language_from_user
+
         follower_ids = Follow.objects.filter(following=user).values_list('follower_id', flat=True)
         from users.models import User as U
         for fid in follower_ids:
             if fid != user.pk:
                 try:
                     recipient = U.objects.get(pk=fid)
+                    _lang = language_from_user(recipient)
                     create_notification(
                         recipient, user, 'followed_post',
-                        f"{user.username} yeni bir gönderi paylaştı: {instance.title[:50]}",
+                        translate(
+                            _lang,
+                            'main.notif.followed_post',
+                            username=user.username,
+                            title=instance.title[:50],
+                        ),
                         question=instance,
                     )
                 except Exception:

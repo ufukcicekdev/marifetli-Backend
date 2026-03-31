@@ -1,7 +1,6 @@
 """
 Sınıf challenge kuralları: aylık öğrenci başlatma, tek aktif üyelik, öğretmen yarışması önceliği.
 """
-import random
 from datetime import datetime, timedelta
 
 from django.conf import settings
@@ -17,19 +16,6 @@ from .models import (
     KidsUser,
     KidsUserRole,
 )
-
-
-CHALLENGE_INVITE_MOTIVATION_LINES = (
-    "Hadi, birlikte daha da güçlenelim — katıl bari! 🎯",
-    "Sen olmadan eksik kalır; davet kapıda! ✨",
-    "Küçük bir adım, büyük eğlence — ne dersin? 🌟",
-    "Arkadaşın seni bekliyor; cesaretin yeter! 💪",
-    "Beraber oynayınca her şey daha renkli olur 🎨",
-)
-
-
-def random_invite_motivation() -> str:
-    return random.choice(CHALLENGE_INVITE_MOTIVATION_LINES)
 
 
 def month_start(dt: datetime | None = None) -> datetime:
@@ -244,11 +230,23 @@ def build_invite_notification_message(
     challenge: KidsChallenge,
     *,
     personal_message: str,
+    lang: str = "tr",
 ) -> str:
+    from core.i18n_catalog import random_invite_motivation, translate
+    from core.i18n_catalog import normalize_lang
+
+    lang = normalize_lang(lang)
     who = inviter.full_name or inviter.email.split("@")[0]
     title = challenge.title
-    tail = random_invite_motivation()
+    tail = random_invite_motivation(lang)
     extra = (personal_message or "").strip()
     if extra:
-        return f"{who} seni “{title}” yarışmasına davet ediyor. Kabul ediyor musun?\n\n💬 {extra}\n\n{tail}"
-    return f"{who} seni “{title}” yarışmasına davet ediyor. Kabul ediyor musun?\n\n{tail}"
+        return translate(
+            lang,
+            "kids.notif.invite_personal",
+            who=who,
+            title=title,
+            extra=extra,
+            tail=tail,
+        )
+    return translate(lang, "kids.notif.invite_line1", who=who, title=title) + "\n\n" + tail

@@ -9,6 +9,9 @@ from django.utils import timezone as django_timezone
 from .models import EmailTemplate, SentEmail
 import logging
 
+from core.i18n_catalog import email_bundle, normalize_lang, translate
+from core.i18n_resolve import language_for_kids_student, language_from_user
+
 logger = logging.getLogger(__name__)
 
 
@@ -81,6 +84,53 @@ def _get_email_base_context():
     except Exception as e:
         logger.debug("Email base context (logo): %s", e)
         return {'logo_url': None, 'logo_data_uri': None, 'site_name': 'Marifetli'}
+
+
+def _format_email_i18n_strings(ei: dict, fmt: dict) -> dict[str, str]:
+    """HTML içinde {{ email_i18n.xxx }} — {username} vb. yer tutucuları doldurur."""
+    out: dict[str, str] = {}
+    for k, v in ei.items():
+        if not isinstance(v, str):
+            out[k] = str(v)
+            continue
+        try:
+            out[k] = v.format(**fmt) if "{" in v else v
+        except (KeyError, ValueError):
+            out[k] = v
+    return out
+
+
+def _email_format_kwargs(context: dict) -> dict:
+    """Şablon subject / düz metin format() için güvenli alanlar."""
+    ctx = context or {}
+    u = ctx.get("user")
+    username = ""
+    if u is not None:
+        username = getattr(u, "username", None) or ""
+    if not username:
+        username = str(ctx.get("username") or "")
+    return {
+        "site_name": ctx.get("site_name") or "Marifetli",
+        "username": username,
+        "verification_url": str(ctx.get("verification_url") or ""),
+        "reset_url": str(ctx.get("reset_url") or ""),
+        "frontend_url": str(ctx.get("frontend_url") or ""),
+        "message": str(ctx.get("message") or ""),
+        "display_name": str(ctx.get("display_name") or ""),
+        "teacher_email": str(ctx.get("teacher_email") or ""),
+        "temp_password": str(ctx.get("temp_password") or ""),
+        "login_url": str(ctx.get("login_url") or ""),
+        "reset_hint_url": str(ctx.get("reset_hint_url") or ""),
+        "parent_name": str(ctx.get("parent_name") or ""),
+        "student_name": str(ctx.get("student_name") or ""),
+        "class_name": str(ctx.get("class_name") or ""),
+        "test_title": str(ctx.get("test_title") or ""),
+        "teacher_name": str(ctx.get("teacher_name") or ""),
+        "teacher_subject": str(ctx.get("teacher_subject") or ""),
+        "duration_text": str(ctx.get("duration_text") or ""),
+        "parent_panel_url": str(ctx.get("parent_panel_url") or ""),
+        "display_name": str(ctx.get("display_name") or ""),
+    }
 
 
 class EmailService:
@@ -183,18 +233,10 @@ class EmailService:
             return sent_email
     
     @staticmethod
-    def send_template_email(recipient, template_type, context, from_email=None):
+    def send_template_email(recipient, template_type, context, from_email=None, language=None):
         """
-        Send email using a stored template
-        
-        Args:
-            recipient: Recipient email address
-            template_type: Type of template (e.g., 'verification', 'password_reset')
-            context: Context data for template rendering
-            from_email: Sender email (optional)
-        
-        Returns:
-            SentEmail object with status
+        Send email using a stored template.
+        Dil: `language` veya alıcı `user.preferred_language`; şablon metinleri `core.i18n_catalog`.
         """
         try:
             template = EmailTemplate.objects.get(template_type=template_type, is_active=True)
@@ -202,18 +244,44 @@ class EmailService:
             logger.error(f"Email template '{template_type}' not found")
             return None
 
-        # Tüm e-posta şablonlarında logo ve site adı kullanılabilsin
         base_ctx = _get_email_base_context()
         merged_context = {**base_ctx, **(context or {})}
         context = merged_context
 
-        # Render template with context (template.html_content is e.g. 'emails/verification_email.html')
-        subject = template.subject.format(**context) if context else template.subject
-        html_content = render_to_string(template.html_content, context) if template.html_content else ''
+        if language is not None:
+            lang = normalize_lang(language)
+        elif context.get("user") is not None:
+            lang = language_from_user(context["user"])
+        else:
+            lang = "tr"
+        fmt = _email_format_kwargs(context)
+        ei = email_bundle(template_type, lang)
+        context["email_i18n"] = _format_email_i18n_strings(ei, fmt)
+        context["html_lang"] = lang
+
+        if context.get("subject_override"):
+            subject = str(context["subject_override"])
+        else:
+            subj_tpl = ei.get("subject") or template.subject
+            try:
+                subject = subj_tpl.format(**fmt)
+            except (KeyError, ValueError):
+                try:
+                    subject = template.subject.format(**context)
+                except Exception:
+                    subject = template.subject
+
+        html_content = render_to_string(template.html_content, context) if template.html_content else ""
+        txt_tpl = ei.get("text_plain") or (template.text_content or "")
         try:
-            text_content = template.text_content.format(**context) if context and template.text_content else (template.text_content or '')
-        except KeyError:
-            text_content = template.text_content or ''
+            text_content = txt_tpl.format(**fmt) if txt_tpl else ""
+        except (KeyError, ValueError):
+            try:
+                text_content = (
+                    template.text_content.format(**context) if context and template.text_content else (template.text_content or "")
+                )
+            except KeyError:
+                text_content = template.text_content or ""
         
         # Metadata: only serializable values for JSONField (no model instances)
         metadata = {'template_type': template_type}
@@ -251,7 +319,8 @@ class EmailService:
         return EmailService.send_template_email(
             recipient=user.email,
             template_type='verification',
-            context=context
+            context=context,
+            language=language_from_user(user),
         )
     
     @staticmethod
@@ -265,7 +334,8 @@ class EmailService:
         return EmailService.send_template_email(
             recipient=user.email,
             template_type='password_reset',
-            context=context
+            context=context,
+            language=language_from_user(user),
         )
 
     @staticmethod
@@ -290,6 +360,7 @@ class EmailService:
                 "token": token,
                 "reset_url": reset_url,
             },
+            language=language_for_kids_student(kids_user),
         )
     
     @staticmethod
@@ -303,7 +374,8 @@ class EmailService:
         return EmailService.send_template_email(
             recipient=user.email,
             template_type='welcome',
-            context=context
+            context=context,
+            language=language_from_user(user),
         )
     
     @staticmethod
@@ -314,12 +386,14 @@ class EmailService:
         temp_password: str,
         login_url: str,
         reset_hint_url: str,
+        language: str | None = None,
     ):
         """
         Kids yönetiminden oluşturulan öğretmene geçici şifre e-postası.
         `emails/kids_teacher_welcome_email.html` + DB şablonu `kids_teacher_welcome`; yoksa düz HTML fallback.
         """
-        display_name = (first_name or "").strip() or "Öğretmen"
+        lang = normalize_lang(language)
+        display_name = (first_name or "").strip() or translate(lang, "kids.teacher_label_fallback")
         context = {
             "display_name": display_name,
             "teacher_email": to_email,
@@ -331,6 +405,7 @@ class EmailService:
             recipient=to_email,
             template_type="kids_teacher_welcome",
             context=context,
+            language=lang,
         )
         if sent is not None:
             return sent
@@ -339,7 +414,7 @@ class EmailService:
             "Email template 'kids_teacher_welcome' bulunamadı; düz metin/HTML fallback kullanılıyor. "
             "Şablon için: python manage.py populate_email_templates"
         )
-        subject = "Marifetli Kids — Öğretmen hesabınız hazır"
+        subject = translate(lang, "email.kids_teacher_welcome.subject")
         html = (
             f"<p>Merhaba {display_name},</p>"
             "<p>Marifetli Kids öğretmen hesabınız oluşturuldu.</p>"
@@ -378,22 +453,25 @@ class EmailService:
         teacher_subject: str,
         duration_text: str,
         parent_panel_url: str,
+        language: str | None = None,
     ):
         """Veliye yeni test yayınlandığında bilgilendirme e-postası gönderir."""
+        lang = normalize_lang(language)
         context = {
-            "parent_name": (parent_name or "").strip() or "Veli",
-            "student_name": (student_name or "").strip() or "Öğrenci",
+            "parent_name": (parent_name or "").strip() or translate(lang, "kids.parent_label_fallback"),
+            "student_name": (student_name or "").strip() or translate(lang, "kids.student_label_fallback"),
             "class_name": (class_name or "").strip() or "-",
-            "test_title": (test_title or "").strip() or "Yeni Test",
-            "teacher_name": (teacher_name or "").strip() or "Öğretmen",
-            "teacher_subject": (teacher_subject or "").strip() or "Sınıf Öğretmeni",
-            "duration_text": (duration_text or "").strip() or "Belirtilmedi",
+            "test_title": (test_title or "").strip() or "Test",
+            "teacher_name": (teacher_name or "").strip() or translate(lang, "kids.teacher_label_fallback"),
+            "teacher_subject": (teacher_subject or "").strip() or translate(lang, "kids.test.teacher_subject_fallback"),
+            "duration_text": (duration_text or "").strip() or "—",
             "parent_panel_url": (parent_panel_url or "").strip(),
         }
         sent = EmailService.send_template_email(
             recipient=to_email,
             template_type="kids_parent_new_test",
             context=context,
+            language=lang,
         )
         if sent is not None:
             return sent
@@ -403,7 +481,7 @@ class EmailService:
             "Şablon için: python manage.py populate_email_templates"
         )
 
-        subject = f"Marifetli Kids — {context['test_title']} için yeni test"
+        subject = translate(lang, "email.kids_parent_new_test.subject", test_title=context["test_title"])
         html = (
             f"<p>Merhaba {context['parent_name']},</p>"
             f"<p><strong>{context['class_name']}</strong> sınıfı için yeni bir test yayınlandı.</p>"
@@ -433,16 +511,25 @@ class EmailService:
         )
 
     @staticmethod
-    def send_notification_email(user, subject, message, notification_type='general'):
-        """Send general notification email"""
+    def send_notification_email(user, message, notification_type='general', *, language=None):
+        """Genel bildirim e-postası — konu ve şablon dili alıcı tercihine göre."""
+        lang = normalize_lang(language) if language else language_from_user(user)
+        lk = f"email.notif_label.{notification_type}"
+        lbl = translate(lang, lk)
+        if lbl == lk:
+            lbl = translate(lang, "email.notif_label.general")
+        subj = translate(lang, "main.email.notification_subject", preview=message[:50])
         context = {
-            'user': user,
-            'message': message,
-            'notification_type': notification_type,
-            'frontend_url': getattr(settings, 'FRONTEND_URL', ''),
+            "user": user,
+            "message": message,
+            "notification_type": notification_type,
+            "notification_type_label": lbl,
+            "frontend_url": getattr(settings, "FRONTEND_URL", ""),
+            "subject_override": subj,
         }
         return EmailService.send_template_email(
             recipient=user.email,
-            template_type='notification',
-            context=context
+            template_type="notification",
+            context=context,
+            language=lang,
         )

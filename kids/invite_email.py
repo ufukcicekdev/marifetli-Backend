@@ -4,6 +4,9 @@ from typing import Optional, Tuple
 
 from django.conf import settings
 from django.utils.html import format_html
+from django.utils.safestring import mark_safe
+
+from core.i18n_catalog import normalize_lang, translate
 
 
 def kids_invite_signup_url(token) -> str:
@@ -26,32 +29,34 @@ def send_kids_parent_invite_email(
     class_name: str,
     teacher_display: str,
     expires_days: int,
+    language: str | None = None,
 ) -> Tuple[bool, Optional[str]]:
     from emails.services import EmailService
 
-    cn = class_name or "Sınıf"
-    td = teacher_display or "Öğretmeniniz"
-    subject = f"Marifetli Kids — {cn} daveti"
+    lang = normalize_lang(language or "tr")
+    cn = (class_name or "").strip() or "-"
+    td = (teacher_display or "").strip() or translate(lang, "kids.teacher_label_fallback")
+    subject = translate(lang, "kids.invite.subject", class_name=cn)
     link_block = format_html('<a href="{}">{}</a>', signup_url, signup_url)
-    html = format_html(
-        "<p>Merhaba,</p>"
-        "<p><strong>{}</strong>, <strong>{}</strong> sınıfı için Marifetli Kids üzerinden "
-        "öğrenci kaydı daveti gönderdi.</p>"
-        "<p>Aşağıdaki bağlantıda önce <strong>veli e-postanız ve şifreniz</strong>, ardından çocuğun bilgileri "
-        "ve çocuk şifresi istenir. Çocuk paneline özel bir kullanıcı adı verilir.</p>"
-        "<p>{}</p>"
-        "<p>Bu davet yaklaşık <strong>{} gün</strong> geçerlidir.</p>"
-        "<p>Marifetli Kids — çocuklar için güvenli proje alanı</p>",
-        td,
-        cn,
-        link_block,
-        expires_days,
+    greeting = translate(lang, "kids.invite.greeting")
+    html_plain = translate(
+        lang,
+        "kids.invite.html",
+        greeting=greeting,
+        teacher=td,
+        class_name=cn,
+        link_block=link_block,
+        days=expires_days,
     )
-    text = (
-        f"Merhaba,\n\n"
-        f"{teacher_display}, {class_name} sınıfı için Marifetli Kids daveti gönderdi.\n\n"
-        f"Kayıt bağlantısı (veli + çocuk kaydı):\n{signup_url}\n\n"
-        f"Davet yaklaşık {expires_days} gün geçerlidir.\n"
+    html = mark_safe(html_plain)
+    text = translate(
+        lang,
+        "kids.invite.text",
+        greeting_plain=translate(lang, "kids.invite.greeting_plain"),
+        teacher=td,
+        class_name=cn,
+        url=signup_url,
+        days=expires_days,
     )
 
     sent = EmailService.send_email(
@@ -64,4 +69,3 @@ def send_kids_parent_invite_email(
     if sent.status == "sent":
         return True, None
     return False, (sent.error_message or "E-posta gönderilemedi")
-

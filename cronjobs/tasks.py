@@ -112,11 +112,15 @@ def moderate_content_task(model_label, pk):
             # Soru sahibine bildirim sadece moderasyon onayından sonra (cevap kendi sorusuna değilse)
             if a.question.author_id != a.author_id:
                 from notifications.services import create_notification
+                from core.i18n_catalog import translate
+                from core.i18n_resolve import language_from_user
+
+                _lang = language_from_user(a.question.author)
                 create_notification(
                     a.question.author,
                     a.author,
                     'answer',
-                    f"{a.author.username} soruna cevap yazdı",
+                    translate(_lang, 'main.notif.answer', username=a.author.username),
                     question=a.question,
                     answer=a,
                 )

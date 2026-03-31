@@ -33,6 +33,8 @@ from .models import (
 )
 from .auth_utils import is_kids_student_user
 from .notifications_service import create_kids_notification
+from core.i18n_catalog import translate
+from core.i18n_resolve import language_for_kids_student, language_from_user
 from .permissions import IsKidsParent, IsKidsTeacherOrAdmin
 from .serializers import (
     KidsChallengeInviteCreateSerializer,
@@ -94,7 +96,12 @@ def _create_peer_invite(
             inv.save(
                 update_fields=["inviter", "personal_message", "status", "responded_at"]
             )
-    msg = build_invite_notification_message(inviter, ch, personal_message=personal_t)
+    msg = build_invite_notification_message(
+        inviter,
+        ch,
+        personal_message=personal_t,
+        lang=language_for_kids_student(invitee),
+    )
     try:
         create_kids_notification(
             notification_type=KidsNotification.NotificationType.CHALLENGE_INVITE,
@@ -210,7 +217,13 @@ class KidsStudentChallengeListCreateView(KidsAuthenticatedMixin, APIView):
                     ends_at=ser.validated_data["ends_at"],
                 )
             who = request.user.full_name or request.user.email
-            msg = f"{who} serbest bir yarışma önerdi: «{ch.title}». Onaylamak için veli paneline bakın."
+            _lang = language_from_user(parent)
+            msg = translate(
+                _lang,
+                "kids.notif.challenge_pending_parent",
+                who=who,
+                title=ch.title,
+            )
             try:
                 create_kids_notification(
                     notification_type=KidsNotification.NotificationType.CHALLENGE_PENDING_PARENT,
@@ -251,7 +264,8 @@ class KidsStudentChallengeListCreateView(KidsAuthenticatedMixin, APIView):
             )
         teacher = kc.teacher
         who = request.user.full_name or request.user.email
-        msg = f"{who} yeni bir yarışma önerisi gönderdi: «{ch.title}»"
+        _lang = language_from_user(teacher)
+        msg = translate(_lang, "kids.notif.challenge_pending_teacher", who=who, title=ch.title)
         try:
             create_kids_notification(
                 notification_type=KidsNotification.NotificationType.CHALLENGE_PENDING_TEACHER,
@@ -599,9 +613,13 @@ class KidsTeacherChallengeReviewView(KidsAuthenticatedMixin, APIView):
                 ch.reviewed_by = request.user
                 ch.save(update_fields=["status", "teacher_rejection_note", "reviewed_at", "reviewed_by", "updated_at"])
             if ch.created_by_student:
-                msg = f"«{ch.title}» yarışma önerin öğretmen tarafından onaylanmadı."
-                if note:
-                    msg = f"{msg} Not: {note}"
+                _lang = language_for_kids_student(ch.created_by_student)
+                base = translate(_lang, "kids.notif.challenge_rejected_teacher", title=ch.title)
+                msg = (
+                    translate(_lang, "kids.notif.challenge_rejected_teacher_note", base=base, note=note)
+                    if note
+                    else base
+                )
                 try:
                     create_kids_notification(
                         notification_type=KidsNotification.NotificationType.CHALLENGE_REJECTED,
@@ -636,7 +654,8 @@ class KidsTeacherChallengeReviewView(KidsAuthenticatedMixin, APIView):
                     student=initiator,
                     defaults={"is_initiator": True},
                 )
-            msg = f"«{ch.title}» yarışma önerin onaylandı! Arkadaşlarına davet gönderebilirsin."
+            _lang = language_for_kids_student(initiator)
+            msg = translate(_lang, "kids.notif.challenge_approved_student", title=ch.title)
             try:
                 create_kids_notification(
                     notification_type=KidsNotification.NotificationType.CHALLENGE_APPROVED,
@@ -755,9 +774,13 @@ class KidsParentFreeChallengeReviewView(KidsAuthenticatedMixin, APIView):
                     ]
                 )
             if ch.created_by_student:
-                msg = f"«{ch.title}» serbest yarışma önerin veli tarafından onaylanmadı."
-                if note:
-                    msg = f"{msg} Not: {note}"
+                _lang = language_for_kids_student(ch.created_by_student)
+                base = translate(_lang, "kids.notif.challenge_rejected_parent", title=ch.title)
+                msg = (
+                    translate(_lang, "kids.notif.challenge_rejected_parent_note", base=base, note=note)
+                    if note
+                    else base
+                )
                 try:
                     create_kids_notification(
                         notification_type=KidsNotification.NotificationType.CHALLENGE_REJECTED,
@@ -792,7 +815,8 @@ class KidsParentFreeChallengeReviewView(KidsAuthenticatedMixin, APIView):
                     student=initiator,
                     defaults={"is_initiator": True},
                 )
-            msg = f"«{ch.title}» serbest yarışma önerin veli onayıyla kabul edildi."
+            _lang = language_for_kids_student(initiator)
+            msg = translate(_lang, "kids.notif.challenge_approved_free", title=ch.title)
             try:
                 create_kids_notification(
                     notification_type=KidsNotification.NotificationType.CHALLENGE_APPROVED,

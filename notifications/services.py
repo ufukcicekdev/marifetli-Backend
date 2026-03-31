@@ -6,6 +6,9 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from .models import Notification, NotificationSetting, FCMDeviceToken
 
+from core.i18n_catalog import translate
+from core.i18n_resolve import language_from_user
+
 User = get_user_model()
 logger = logging.getLogger(__name__)
 
@@ -111,18 +114,25 @@ def create_notification(recipient, sender, notification_type: str, message: str,
         design=design,
         community=community,
     )
+    lang = language_from_user(recipient)
     # E-posta (ayarlara göre)
     if _should_send_email(recipient, notification_type):
         try:
             from emails.services import EmailService
-            EmailService.send_notification_email(recipient, f"Bildirim: {message[:50]}", message, notification_type)
+
+            EmailService.send_notification_email(
+                recipient,
+                message,
+                notification_type,
+                language=lang,
+            )
         except Exception:
             pass
     # Push (FCM) - ayarlara göre (push_notifications + notify_on_answer vb.)
     if _should_send_push(recipient, notification_type):
         send_fcm_to_user(
             recipient,
-            "Marifetli",
+            translate(lang, "main.push.app_title"),
             message,
             notification_type,
             question=question,

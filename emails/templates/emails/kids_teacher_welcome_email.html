@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="{{ html_lang }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Marifetli Kids — Öğretmen hesabınız</title>
+    <title>{{ email_i18n.page_title }}</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -20,16 +20,8 @@
             padding: 30px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
-        .header {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        .logo {
-            font-size: 28px;
-            font-weight: bold;
-            color: #7c3aed;
-            margin-bottom: 10px;
-        }
+        .header { text-align: center; margin-bottom: 30px; }
+        .logo { font-size: 28px; font-weight: bold; color: #7c3aed; margin-bottom: 10px; }
         .kids-box {
             background: linear-gradient(135deg, #7c3aed 0%, #c026d3 100%);
             color: white;
@@ -46,9 +38,7 @@
             margin: 20px 0;
             font-size: 15px;
         }
-        .credentials strong {
-            color: #5b21b6;
-        }
+        .credentials strong { color: #5b21b6; }
         .button {
             display: inline-block;
             background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%);
@@ -101,37 +91,38 @@
             {% else %}
             <div class="logo">🎒 Marifetli Kids</div>
             {% endif %}
-            <h1 style="margin: 0; font-size: 22px; color: #1e1b4b;">Öğretmen hesabınız hazır</h1>
+            <h1 style="margin: 0; font-size: 22px; color: #1e1b4b;">{{ email_i18n.h1 }}</h1>
         </div>
 
         <div class="kids-box">
-            <h2 style="margin: 0 0 8px 0; font-size: 20px;">Merhaba {{ display_name }}! 👩‍🏫</h2>
-            <p style="margin: 0; opacity: 0.95;">Marifetli Kids üzerinden öğretmen hesabınız oluşturuldu.</p>
+            <h2 style="margin: 0 0 8px 0; font-size: 20px;">{{ email_i18n.greeting_h2 }}</h2>
+            <p style="margin: 0; opacity: 0.95;">{{ email_i18n.intro }}</p>
         </div>
 
-        <p>Aşağıdaki bilgilerle giriş yapabilirsiniz. Güvenlik için ilk fırsatta şifrenizi değiştirmenizi öneririz.</p>
+        <p>{{ email_i18n.lead_p }}</p>
 
         <div class="credentials">
-            <p style="margin: 0 0 8px 0;"><strong>Giriş e-postası:</strong> {{ teacher_email }}</p>
-            <p style="margin: 0;"><strong>Geçici şifre:</strong> {{ temp_password }}</p>
+            <p style="margin: 0 0 8px 0;"><strong>{{ email_i18n.label_email }}:</strong> {{ teacher_email }}</p>
+            <p style="margin: 0;"><strong>{{ email_i18n.label_password }}:</strong> {{ temp_password }}</p>
         </div>
 
         <div style="text-align: center;">
-            <a href="{{ login_url }}" class="button">Kids öğretmen girişi</a>
+            <a href="{{ login_url }}" class="button">{{ email_i18n.button_cta }}</a>
         </div>
 
-        <p>Bağlantı çalışmazsa adresi kopyalayın:</p>
+        <p>{{ email_i18n.copy_hint }}</p>
         <div class="url-box">{{ login_url }}</div>
 
         <div class="warning">
-            <strong>Şifre değiştirme:</strong> Giriş ekranındaki <em>Şifremi unuttum</em> akışını kullanabilirsiniz.
-            Aynı sayfa: <a href="{{ reset_hint_url }}">{{ reset_hint_url }}</a>
+            {{ email_i18n.security_p }} <a href="{{ reset_hint_url }}">{{ reset_hint_url }}</a>
         </div>
 
-        <p>İyi dersler dileriz,<br><strong>Marifetli Kids</strong></p>
+        <p>{{ email_i18n.login_p }}</p>
+
+        <p>— <strong>Marifetli Kids</strong></p>
 
         <div class="footer">
-            <p>Bu e-posta yönetici tarafından oluşturulan öğretmen hesabı için gönderilmiştir.</p>
+            <p>{{ email_i18n.footer_admin }}</p>
             <p>&copy; {{ site_name|default:"Marifetli" }}</p>
         </div>
     </div>

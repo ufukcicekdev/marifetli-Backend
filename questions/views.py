@@ -13,6 +13,8 @@ from django.core.cache import cache
 from django.db.models import Q
 from django.contrib.auth import get_user_model
 from core.permissions import IsVerified
+from core.i18n_catalog import translate
+from core.i18n_resolve import language_from_user
 from core.cache_utils import get_question_list_cache_key, invalidate_question_list
 from .models import Question, QuestionLike, QuestionView, QuestionReport, Tag
 from .serializers import QuestionListSerializer, QuestionDetailSerializer, QuestionCreateSerializer, QuestionLikeSerializer, QuestionReportSerializer, TagSerializer
@@ -211,11 +213,13 @@ class QuestionLikeView(generics.CreateAPIView):
         # Soru sahibine bildirim (kendisi beğenmediyse)
         if question.author_id != self.request.user.pk:
             from notifications.services import create_notification
+
+            _lang = language_from_user(question.author)
             create_notification(
                 question.author,
                 self.request.user,
                 'like_question',
-                f"{self.request.user.username} gönderini beğendi",
+                translate(_lang, 'main.notif.like_question', username=self.request.user.username),
                 question=question,
             )
 

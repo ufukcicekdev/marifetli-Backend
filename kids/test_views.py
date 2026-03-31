@@ -13,6 +13,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from emails.services import EmailService
+
+from core.i18n_catalog import translate
+from core.i18n_resolve import language_for_kids_recipient, language_from_user
+
 from .auth_utils import is_kids_admin_user, is_kids_student_user, is_kids_teacher_or_admin_user, is_main_user
 from .authentication import KidsJWTAuthentication
 from .models import (
@@ -80,26 +84,23 @@ def _notify_students_new_test(test_id: int, sender_user) -> None:
         flat=True,
     )
     students = KidsUser.objects.filter(pk__in=student_ids).select_related("parent_account")
-    msg = f"Yeni test: {test.title} ({test.kids_class.name})"
-    teacher_name = (
+    teacher_name_raw = (
         f"{getattr(sender_user, 'first_name', '')} {getattr(sender_user, 'last_name', '')}".strip()
         or getattr(sender_user, "email", "")
-        or "Öğretmen"
     )
-    teacher_subject = (
-        KidsTeacherBranch.objects.filter(teacher_id=getattr(sender_user, "id", None))
-        .values_list("subject", flat=True)
-        .first()
-        or "Sınıf Öğretmeni"
-    )
-    duration_text = (
-        f"{int(test.duration_minutes)} dakika"
-        if test.duration_minutes and int(test.duration_minutes) > 0
-        else "Süre sınırı yok"
-    )
+    teacher_subject_raw = KidsTeacherBranch.objects.filter(teacher_id=getattr(sender_user, "id", None)).values_list(
+        "subject", flat=True
+    ).first()
     base = (getattr(settings, "FRONTEND_URL", "") or "").rstrip("/")
     parent_panel_url = f"{base}/kids/veli/panel" if base else "/kids/veli/panel"
     for student in students:
+        lang_s = language_for_kids_recipient(recipient_student=student)
+        msg = translate(
+            lang_s,
+            "kids.notif.new_test",
+            title=test.title,
+            class_name=test.kids_class.name,
+        )
         try:
             create_kids_notification(
                 recipient_student=student,
@@ -114,8 +115,16 @@ def _notify_students_new_test(test_id: int, sender_user) -> None:
         parent_email = (getattr(parent, "email", "") or "").strip()
         if not parent_email:
             continue
+        parent_lang = language_from_user(parent)
+        teacher_name = teacher_name_raw or translate(parent_lang, "kids.teacher_label_fallback")
+        teacher_subject = teacher_subject_raw or translate(parent_lang, "kids.test.teacher_subject_fallback")
+        if test.duration_minutes and int(test.duration_minutes) > 0:
+            duration_text = translate(parent_lang, "kids.test.duration_minutes", n=int(test.duration_minutes))
+        else:
+            duration_text = translate(parent_lang, "kids.test.duration_none")
         parent_name = (
-            f"{getattr(parent, 'first_name', '')} {getattr(parent, 'last_name', '')}".strip() or "Veli"
+            f"{getattr(parent, 'first_name', '')} {getattr(parent, 'last_name', '')}".strip()
+            or translate(parent_lang, "kids.parent_label_fallback")
         )
         student_name = (student.full_name or "").strip() or student.email
         try:
@@ -129,6 +138,7 @@ def _notify_students_new_test(test_id: int, sender_user) -> None:
                 teacher_subject=teacher_subject,
                 duration_text=duration_text,
                 parent_panel_url=parent_panel_url,
+                language=parent_lang,
             )
         except Exception:
             continue

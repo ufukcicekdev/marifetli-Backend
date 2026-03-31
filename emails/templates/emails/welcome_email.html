@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="{{ html_lang }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Welcome to Marifetli</title>
+    <title>{{ email_i18n.page_title }}</title>
     <style>
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -20,16 +20,8 @@
             padding: 30px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
-        .header {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        .logo {
-            font-size: 28px;
-            font-weight: bold;
-            color: #f97316;
-            margin-bottom: 10px;
-        }
+        .header { text-align: center; margin-bottom: 30px; }
+        .logo { font-size: 28px; font-weight: bold; color: #f97316; margin-bottom: 10px; }
         .welcome-box {
             background: linear-gradient(135deg, #f97316 0%, #fb923c 100%);
             color: white;
@@ -44,10 +36,7 @@
             border-radius: 8px;
             margin: 20px 0;
         }
-        .feature-list ul {
-            list-style: none;
-            padding-left: 0;
-        }
+        .feature-list ul { list-style: none; padding-left: 0; }
         .feature-list li {
             padding: 8px 0;
             padding-left: 25px;
@@ -69,10 +58,6 @@
             border-radius: 5px;
             font-weight: bold;
             margin: 20px 0;
-            text-align: center;
-        }
-        .button:hover {
-            background-color: #ea580c;
         }
         .footer {
             margin-top: 30px;
@@ -98,39 +83,33 @@
             {% else %}
             <div class="logo">🦉 Marifetli</div>
             {% endif %}
-            <h1>Aramıza Hoş Geldiniz!</h1>
+            <h1>{{ email_i18n.h1 }}</h1>
         </div>
-        
+
         <div class="welcome-box">
-            <h2>Merhaba {{ username }}! 👋</h2>
-            <p>Marifetli ailesinin bir parçası olduğunuz için çok mutluyuz!</p>
+            <h2>{{ email_i18n.welcome_title }}</h2>
+            <p>{{ email_i18n.welcome_p }}</p>
         </div>
-        
-        <p>Marifetli, bilgi paylaşımının gücünü keşfetmeniz için tasarlandı. İşte sizi bekleyen özellikler:</p>
-        
+
+        <p>{{ email_i18n.intro_p }}</p>
+
         <div class="feature-list">
             <ul>
-                <li><strong>Soru Sorun:</strong> Merak ettiklerinizi sorun, topluluğumuzdan cevaplar alın</li>
-                <li><strong>Bilgi Paylaşın:</strong> Uzmanlık alanlarınızda cevaplar vererek başkalarına yardım edin</li>
-                <li><strong>Topluluk Oluşturun:</strong> Benzer ilgi alanlarına sahip kişilerle bağlantı kurun</li>
-                <li><strong>İtibar Kazanın:</strong> Kaliteli içeriklerle puan toplayın ve rozetler kazanın</li>
-                <li><strong>Takip Edin:</strong> İlgi alanlarınıza uygun kategorileri ve kullanıcıları takip edin</li>
+                <li><strong>{{ email_i18n.feature1 }}</strong></li>
+                <li><strong>{{ email_i18n.feature2 }}</strong></li>
+                <li><strong>{{ email_i18n.feature3 }}</strong></li>
             </ul>
         </div>
-        
-        <p>Hemen keşfetmeye başlayın:</p>
-        
+
         <div style="text-align: center;">
-            <a href="{{ frontend_url }}" class="button">Keşfetmeye Başla</a>
+            <a href="{{ frontend_url }}" class="button">{{ email_i18n.cta }}</a>
         </div>
-        
-        <p>Bir sorunuz mu var? Destek ekibimiz her zaman yanınızda.</p>
-        
-        <p>Tekrar hoş geldiniz!<br>Marifetli Ekibi</p>
-        
+
+        <p>{{ email_i18n.closing|safe }}</p>
+
         <div class="footer">
-            <p>Marifetli - Bilginin Gücü 🦉</p>
-            <p>&copy; 2026 Marifetli. Tüm hakları saklıdır.</p>
+            <p>{{ email_i18n.footer1 }}</p>
+            <p>{{ email_i18n.footer2 }}</p>
         </div>
     </div>
 </body>
