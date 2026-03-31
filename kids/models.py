@@ -12,6 +12,12 @@ class KidsUserRole(models.TextChoices):
     STUDENT = "student", "Öğrenci"
 
 
+class KidsLanguageCode(models.TextChoices):
+    TR = "tr", "Türkçe"
+    EN = "en", "English"
+    GE = "ge", "Deutsch"
+
+
 class KidsUser(models.Model):
     """Yalnızca çocuk (öğrenci) hesapları. Veli ve öğretmen `users.User` + `kids_portal_role`."""
 
@@ -203,6 +209,13 @@ class KidsClass(models.Model):
         blank=True,
         default="",
         help_text="Örn. 2024-2025. Yeni eğitim yılında ayrı sınıf kaydı açıp etiketle ayırmak için.",
+    )
+    language = models.CharField(
+        "sınıf dili",
+        max_length=2,
+        choices=KidsLanguageCode.choices,
+        default=KidsLanguageCode.TR,
+        help_text="Sınıfa bağlı öğrenciler bu dili kullanır.",
     )
     school = models.ForeignKey(
         KidsSchool,

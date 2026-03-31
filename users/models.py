@@ -15,6 +15,11 @@ class KidsPortalRole(models.TextChoices):
 
 
 class User(AbstractUser):
+    class PreferredLanguage(models.TextChoices):
+        TR = "tr", _("Turkish")
+        EN = "en", _("English")
+        GE = "ge", _("German")
+
     email = models.EmailField(unique=True)
     username = models.CharField(max_length=150, unique=True)
     bio = models.TextField(max_length=500, blank=True)
@@ -54,6 +59,13 @@ class User(AbstractUser):
         blank=True,
         db_index=True,
         help_text="Boş: ana sitede kayıtlı, Kids API’ye giremez. Öğretmen/veli/yönetim buradan atanır.",
+    )
+    preferred_language = models.CharField(
+        "Tercih edilen dil",
+        max_length=8,
+        choices=PreferredLanguage.choices,
+        default=PreferredLanguage.TR,
+        db_index=True,
     )
 
     USERNAME_FIELD = 'email'

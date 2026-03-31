@@ -145,6 +145,32 @@ from .serializers import (
 
 logger = logging.getLogger(__name__)
 
+KIDS_ALLOWED_LANGUAGES = {
+    MainUser.PreferredLanguage.TR,
+    MainUser.PreferredLanguage.EN,
+    MainUser.PreferredLanguage.GE,
+}
+
+
+def _normalize_language_code(raw: str | None, fallback: str = MainUser.PreferredLanguage.TR) -> str:
+    code = (raw or "").strip().lower()
+    if code in KIDS_ALLOWED_LANGUAGES:
+        return code
+    return fallback
+
+
+def _student_effective_language(student: KidsUser) -> str:
+    enrollment = (
+        KidsEnrollment.objects.filter(student=student)
+        .select_related("kids_class")
+        .order_by("created_at", "id")
+        .first()
+    )
+    kids_class = getattr(enrollment, "kids_class", None)
+    if not kids_class:
+        return MainUser.PreferredLanguage.TR
+    return _normalize_language_code(getattr(kids_class, "language", None))
+
 
 def _kids_password_reset_abs_url(token: str) -> str:
     base = (getattr(settings, "KIDS_FRONTEND_URL", None) or "").strip().rstrip("/")
@@ -192,7 +218,12 @@ def _send_kids_teacher_welcome_email(
 
 
 def _kids_user_payload(user: KidsUser, request) -> dict:
-    return KidsUserSerializer(user, context={"request": request}).data
+    data = KidsUserSerializer(user, context={"request": request}).data
+    effective_language = _student_effective_language(user)
+    data["preferred_language"] = None
+    data["effective_language"] = effective_language
+    data["language_locked_by_teacher"] = True
+    return data
 
 
 def _map_user_to_api_role(u: MainUser) -> str:
@@ -236,6 +267,9 @@ def _account_kids_payload(u: MainUser, request) -> dict:
         "student_login_name": None,
         "phone": None,
         "linked_students": linked,
+        "preferred_language": _normalize_language_code(getattr(u, "preferred_language", None)),
+        "effective_language": _normalize_language_code(getattr(u, "preferred_language", None)),
+        "language_locked_by_teacher": False,
     }
 
 
@@ -1352,13 +1386,37 @@ class KidsMeView(KidsAuthenticatedMixin, APIView):
     def patch(self, request):
         u = request.user
         if isinstance(u, MainUser):
+            updated_fields: list[str] = []
             fn = (request.data.get("first_name") or "").strip()
             ln = (request.data.get("last_name") or "").strip()
             if fn:
                 u.first_name = fn[:150]
+                updated_fields.append("first_name")
             if ln:
                 u.last_name = ln[:150]
-            u.save(update_fields=["first_name", "last_name", "updated_at"])
+                updated_fields.append("last_name")
+
+            incoming_lang = request.data.get("preferred_language", None)
+            if incoming_lang is not None:
+                role = _map_user_to_api_role(u)
+                if role not in {"teacher", "parent"}:
+                    return Response(
+                        {"detail": "Bu rolde dil tercihi güncellenemez."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                lang_code = _normalize_language_code(str(incoming_lang), fallback="")
+                if not lang_code:
+                    return Response(
+                        {"detail": "Geçersiz dil kodu. Desteklenen: tr, en, ge."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if u.preferred_language != lang_code:
+                    u.preferred_language = lang_code
+                    updated_fields.append("preferred_language")
+
+            if updated_fields:
+                updated_fields.append("updated_at")
+                u.save(update_fields=updated_fields)
             return Response(_account_kids_payload(u, request))
         ser = KidsUserProfileUpdateSerializer(u, data=request.data, partial=True)
         ser.is_valid(raise_exception=True)

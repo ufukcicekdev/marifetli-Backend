@@ -408,6 +408,7 @@ class KidsClassSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "academic_year_label",
+            "language",
             "school",
             "school_id",
             "teacher",
