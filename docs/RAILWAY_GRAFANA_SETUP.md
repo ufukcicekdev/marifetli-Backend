@@ -76,3 +76,37 @@ Uygulamada root (`/`) 200 donuyor. Ayri health endpoint isterse:
 - Railway healthcheck: `/`
 - Alternatif: `/healthz` endpointi eklenebilir.
 
+## 7) Loki (log) ve Tempo (trace) aktivasyonu
+
+Bu repoda Loki/Tempo entegrasyonu opsiyonel olarak eklendi.
+
+### A) Loki log push
+
+Backend service variables:
+
+- `LOKI_PUSH_URL=http://loki:3100/loki/api/v1/push`
+
+Not:
+
+- Bu degisken doluysa Django loglari Loki'ye push edilir.
+- Bos birakilirsa sadece mevcut console/file/db loglama devam eder.
+
+### B) Tempo trace (OTLP HTTP)
+
+Backend service variables:
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318/v1/traces`
+- `OTEL_SERVICE_NAME=marifetli-backend` (opsiyonel; varsayilan ayni)
+
+Not:
+
+- `OTEL_EXPORTER_OTLP_ENDPOINT` yoksa tracing hic acilmaz.
+- Endpoint verildiginde Django + requests + psycopg2 trace enstrumantasyonu aktif olur.
+
+### C) Grafana tarafi
+
+- Explore -> `Loki` datasource secip log query calistir:
+  - `{application="marifetli-backend"}`
+- Explore -> `Tempo` datasource secip trace search yap.
+
+

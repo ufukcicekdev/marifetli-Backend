@@ -630,6 +630,12 @@ CELERY_BEAT_SCHEDULE = {
 # Loglama: varsayılan konsola gider; LOG_DIR verilirse dosyaya; logs app ile DB'ye yazılır.
 LOG_DIR = config("LOG_DIR", default="")
 LOG_TO_DB = config("LOG_TO_DB", default=True, cast=bool)  # False ile DB'ye yazmayı kapat
+# Loki push endpoint (optional): http://loki:3100/loki/api/v1/push
+LOKI_PUSH_URL = config("LOKI_PUSH_URL", default="").strip()
+LOKI_PUSH_TAGS = {
+    "application": "marifetli-backend",
+    "environment": config("RAILWAY_ENVIRONMENT_NAME", default="production"),
+}
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -670,3 +676,15 @@ if LOG_TO_DB:
     for name in ("moderation", "cronjobs", "search_console", "bot_activity"):
         if name in LOGGING["loggers"] and "db" not in LOGGING["loggers"][name]["handlers"]:
             LOGGING["loggers"][name]["handlers"].append("db")
+if LOKI_PUSH_URL:
+    LOGGING["handlers"]["loki"] = {
+        "class": "logging_loki.LokiHandler",
+        "url": LOKI_PUSH_URL,
+        "tags": LOKI_PUSH_TAGS,
+        "version": "1",
+    }
+    if "loki" not in LOGGING["root"]["handlers"]:
+        LOGGING["root"]["handlers"].append("loki")
+    for name in ("moderation", "cronjobs", "search_console", "bot_activity"):
+        if name in LOGGING["loggers"] and "loki" not in LOGGING["loggers"][name]["handlers"]:
+            LOGGING["loggers"][name]["handlers"].append("loki")

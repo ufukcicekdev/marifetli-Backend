@@ -11,8 +11,10 @@ import os
 
 from channels.routing import ProtocolTypeRouter, URLRouter
 from django.core.asgi import get_asgi_application
+from core.observability import setup_observability
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "marifetli_project.settings")
+setup_observability("marifetli-backend")
 
 django_asgi_app = get_asgi_application()
 
