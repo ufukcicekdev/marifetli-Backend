@@ -511,6 +511,8 @@ SMTP2GO_FROM_EMAIL = config("SMTP2GO_FROM_EMAIL", default="noreply@marifetli.com
 # Blog API (n8n vb. otomasyonlardan yazı eklemek için). X-API-Key header ile kimlik doğrulama.
 BLOG_API_KEY = config("BLOG_API_KEY", default="").strip()
 BLOG_AUTHOR_USERNAME = config("BLOG_AUTHOR_USERNAME", default="").strip()  # Boşsa ilk superuser kullanılır
+# Blog konu kuyruğundan otomatik içerik üretimi (Celery Beat + Gemini).
+BLOG_AUTOMATION_ENABLED = config("BLOG_AUTOMATION_ENABLED", default=False, cast=bool)
 
 # Firebase Cloud Messaging (push bildirimleri) — .env'den oku
 FIREBASE_PROJECT_ID = config("FIREBASE_PROJECT_ID", default="")
@@ -641,6 +643,10 @@ CELERY_BEAT_SCHEDULE = {
     "kids-notify-assignment-windows": {
         "task": "kids.tasks.notify_kids_assignment_windows_opened",
         "schedule": crontab(minute="*/5"),
+    },
+    "blog-generate-from-queue": {
+        "task": "blog.generate_blog_from_queue",
+        "schedule": crontab(minute=30, hour=10, day_of_month="*/2"),  # Iki gunde bir
     },
 }
 

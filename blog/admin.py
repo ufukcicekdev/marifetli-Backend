@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.utils import timezone
-from .models import BlogPost, BlogComment, BlogLike
+from .models import BlogPost, BlogComment, BlogLike, BlogTopicQueue
 
 
 @admin.register(BlogPost)
@@ -44,3 +44,18 @@ class BlogLikeAdmin(admin.ModelAdmin):
     list_display = ['post', 'user', 'created_at']
     list_filter = ['created_at']
     raw_id_fields = ['post', 'user']
+
+
+@admin.register(BlogTopicQueue)
+class BlogTopicQueueAdmin(admin.ModelAdmin):
+    list_display = [
+        "topic",
+        "is_completed",
+        "generated_post",
+        "completed_at",
+        "created_at",
+    ]
+    list_filter = ["is_completed", "created_at", "completed_at"]
+    search_fields = ["topic", "last_error", "generated_post__title"]
+    raw_id_fields = ["generated_post"]
+    readonly_fields = ["generated_post", "completed_at", "last_error", "created_at", "updated_at"]

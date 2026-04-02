@@ -54,3 +54,20 @@ Hatalar:
 - **401:** `X-API-Key` yok veya yanlış.
 - **400:** `title` veya `content` eksik / validasyon hatası.
 - **503:** Yazar kullanıcı bulunamadı (BLOG_AUTHOR_USERNAME veya superuser gerekli).
+
+---
+
+## Celery ile konu tablosundan otomatik blog
+
+n8n yerine doğrudan backend içinde otomasyon çalıştırmak için:
+
+```env
+BLOG_AUTOMATION_ENABLED=true
+GEMINI_API_KEY=your-gemini-key
+BLOG_AUTHOR_USERNAME=admin
+```
+
+- Admin panelde `Blog Topic Queue` tablosuna konu ekleyin (`topic` alanı).
+- Celery Beat görevi **2 günde bir** `blog.generate_blog_from_queue` task'ını çalıştırır.
+- Task tamamlanmamış ilk satırı alır, yazıyı üretir/yayımlar, satırı `is_completed=true` yapar.
+- Hata olursa `last_error` alanına yazar; satır tamamlanmaz, sonraki turda tekrar denenir.

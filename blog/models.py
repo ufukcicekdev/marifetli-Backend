@@ -70,3 +70,29 @@ class BlogLike(models.Model):
 
     def __str__(self):
         return f"{self.user.username} likes {self.post.title}"
+
+
+class BlogTopicQueue(models.Model):
+    """Periyodik blog üretimi için konu kuyruğu."""
+
+    topic = models.CharField(max_length=255, unique=True)
+    is_completed = models.BooleanField(default=False, db_index=True)
+    generated_post = models.ForeignKey(
+        BlogPost,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="generated_from_topics",
+    )
+    completed_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["is_completed", "created_at"]
+        verbose_name = "Blog Topic Queue"
+        verbose_name_plural = "Blog Topic Queue"
+
+    def __str__(self):
+        return self.topic
