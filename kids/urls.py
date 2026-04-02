@@ -103,6 +103,10 @@ urlpatterns = [
         views.KidsHomeworkAttachmentDetailView.as_view(),
     ),
     path(
+        "classes/<int:class_id>/homeworks/<int:homework_id>/submissions/",
+        views.KidsHomeworkSubmissionsByHomeworkView.as_view(),
+    ),
+    path(
         "classes/<int:class_id>/assignments/<int:assignment_id>/",
         views.KidsAssignmentDetailPatchView.as_view(),
     ),
@@ -114,6 +118,10 @@ urlpatterns = [
     path(
         "teacher/homeworks/submissions/inbox/",
         views.KidsTeacherHomeworkInboxView.as_view(),
+    ),
+    path(
+        "teacher/homeworks/<int:homework_id>/submissions/",
+        views.KidsTeacherHomeworkSubmissionDetailView.as_view(),
     ),
     path(
         "teacher/homeworks/submissions/<int:submission_id>/review/",

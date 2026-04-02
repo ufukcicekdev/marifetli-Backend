@@ -2810,6 +2810,100 @@ class KidsHomeworkAttachmentDetailView(KidsAuthenticatedMixin, APIView):
         return Response({"homework": KidsHomeworkSerializer(hw, context={"request": request}).data})
 
 
+class KidsHomeworkSubmissionsByHomeworkView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def get(self, request, class_id, homework_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        hw = (
+            KidsHomework.objects.filter(pk=homework_id, kids_class_id=class_id)
+            .prefetch_related("attachments")
+            .first()
+        )
+        if not hw:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        qs = (
+            KidsHomeworkSubmission.objects.filter(homework_id=homework_id)
+            .select_related("student", "homework", "homework__kids_class", "homework__created_by")
+            .prefetch_related("homework__attachments")
+            .order_by("student__first_name", "student__last_name", "student_id")
+        )
+        rows = list(qs)
+        status_counts = {}
+        for row in rows:
+            key = row.status
+            status_counts[key] = int(status_counts.get(key, 0)) + 1
+
+        return Response(
+            {
+                "homework": KidsHomeworkSerializer(hw, context={"request": request}).data,
+                "summary": {
+                    "total": len(rows),
+                    "submitted": sum(
+                        1 for r in rows if r.status != KidsHomeworkSubmission.Status.PUBLISHED
+                    ),
+                    "not_submitted": sum(
+                        1 for r in rows if r.status == KidsHomeworkSubmission.Status.PUBLISHED
+                    ),
+                    "status_counts": status_counts,
+                },
+                "submissions": KidsHomeworkSubmissionSerializer(
+                    rows, many=True, context={"request": request}
+                ).data,
+            }
+        )
+
+
+class KidsTeacherHomeworkSubmissionDetailView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def get(self, request, homework_id):
+        hw = (
+            KidsHomework.objects.select_related("kids_class")
+            .prefetch_related("attachments")
+            .filter(pk=homework_id)
+            .first()
+        )
+        if not hw:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        allowed_class_ids = set(_teacher_class_queryset(request.user).values_list("id", flat=True))
+        if hw.kids_class_id not in allowed_class_ids:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        rows = list(
+            KidsHomeworkSubmission.objects.filter(homework_id=homework_id)
+            .select_related("student", "homework", "homework__kids_class", "homework__created_by")
+            .prefetch_related("homework__attachments")
+            .order_by("student__first_name", "student__last_name", "student_id")
+        )
+        status_counts = {}
+        for row in rows:
+            key = row.status
+            status_counts[key] = int(status_counts.get(key, 0)) + 1
+
+        return Response(
+            {
+                "homework": KidsHomeworkSerializer(hw, context={"request": request}).data,
+                "summary": {
+                    "total": len(rows),
+                    "submitted": sum(
+                        1 for r in rows if r.status != KidsHomeworkSubmission.Status.PUBLISHED
+                    ),
+                    "not_submitted": sum(
+                        1 for r in rows if r.status == KidsHomeworkSubmission.Status.PUBLISHED
+                    ),
+                    "status_counts": status_counts,
+                },
+                "submissions": KidsHomeworkSubmissionSerializer(
+                    rows, many=True, context={"request": request}
+                ).data,
+            }
+        )
+
+
 class KidsTeacherHomeworkInboxView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
