@@ -663,6 +663,7 @@ LOGGING = {
         "console": {
             "class": "logging.StreamHandler",
             "formatter": "verbose",
+            "stream": "ext://sys.stdout",
         },
     },
     "root": {"handlers": ["console"], "level": "INFO"},
