@@ -41,6 +41,7 @@ CATEGORY_EXPERT_LIMIT_PERIOD=day
 ```bash
 python manage.py migrate
 python manage.py seed_category_experts   # Tüm ana kategorilere CategoryExpert kaydı
+python manage.py seed_kids_expert_categories  # Kids odaklı uzman kategorileri + alt başlıklar
 ```
 
 Admin: **Kategori uzmanları** — yeni ana kategori ekledikten sonra uzman kaydı oluşturun veya `seed_category_experts` tekrar çalıştırın. Pasif (`is_active=False`) uzmanlar API listesinde dönmez.
