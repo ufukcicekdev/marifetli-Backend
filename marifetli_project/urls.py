@@ -34,6 +34,7 @@ from search_console import views as search_console_views
 
 urlpatterns = [
     path('', root_view),
+    path('', include('django_prometheus.urls')),
     path('sitemap.xml', search_console_views.sitemap_index),
     path('sitemap-static.xml', search_console_views.sitemap_static),
     path('sitemap-questions.xml', search_console_views.sitemap_questions),
