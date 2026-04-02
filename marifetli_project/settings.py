@@ -87,6 +87,11 @@ REQUEST_LOGGING_EXCLUDE_PREFIXES = tuple(
     )
 )
 
+# Metrics endpoint security
+# Production'da public metrics'i kapatmak icin varsayilan false.
+METRICS_PUBLIC_ENABLED = config("METRICS_PUBLIC_ENABLED", default=False, cast=bool)
+METRICS_BEARER_TOKEN = config("METRICS_BEARER_TOKEN", default="").strip()
+
 MIDDLEWARE = [
     "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "django.middleware.security.SecurityMiddleware",

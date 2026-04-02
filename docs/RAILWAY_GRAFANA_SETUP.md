@@ -20,6 +20,16 @@ Deploy sonrasi test:
 - `GET https://<backend-domain>/metrics`
 - Cikti icinde `django_http_requests_total` vb. metrikler gorulmeli.
 
+## 1.1) Metrics endpoint güvenliği (onerilen)
+
+Backend service variables:
+
+- `METRICS_PUBLIC_ENABLED=false`
+- `METRICS_BEARER_TOKEN=<uzun-rastgele-token>`
+
+Bu durumda disaridan `/metrics` endpointi ya 404 (public kapali) ya da token yoksa 403 doner.
+Prometheus scrape icin Authorization header kullan.
+
 ## 2) Railway Grafana template
 
 Railway'de Grafana template'i deploy et.
@@ -43,6 +53,9 @@ scrape_configs:
   - job_name: marifetli-backend
     metrics_path: /metrics
     scrape_interval: 15s
+    authorization:
+      type: Bearer
+      credentials: <METRICS_BEARER_TOKEN>
     static_configs:
       - targets:
           - <backend-hostname>:8000

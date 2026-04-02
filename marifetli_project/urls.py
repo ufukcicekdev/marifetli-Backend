@@ -16,10 +16,11 @@ Including another URLconf
 """
 
 from django.contrib import admin
-from django.http import JsonResponse
+from django.http import JsonResponse, Http404
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from django_prometheus.exports import ExportToDjangoView
 
 
 def root_view(request):
@@ -29,12 +30,32 @@ def root_view(request):
     from django.http import Http404
     raise Http404()
 
+
+def metrics_view(request):
+    """
+    Protected metrics endpoint.
+
+    - Production'da METRICS_PUBLIC_ENABLED=False ise 404 doner.
+    - METRICS_BEARER_TOKEN tanimliysa Authorization: Bearer <token> gerekir.
+    """
+    if not settings.DEBUG and not getattr(settings, "METRICS_PUBLIC_ENABLED", False):
+        raise Http404()
+
+    token = getattr(settings, "METRICS_BEARER_TOKEN", "")
+    if token:
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {token}":
+            return JsonResponse({"detail": "forbidden"}, status=403)
+
+    return ExportToDjangoView(request)
+
 # Sitemap'lar: domain backend'e yönleniyorsa ping 404 almasın diye (search_console.views)
 from search_console import views as search_console_views
 
 urlpatterns = [
     path('', root_view),
-    path('', include('django_prometheus.urls')),
+    path('metrics', metrics_view),
+    path('metrics/', metrics_view),
     path('sitemap.xml', search_console_views.sitemap_index),
     path('sitemap-static.xml', search_console_views.sitemap_static),
     path('sitemap-questions.xml', search_console_views.sitemap_questions),
