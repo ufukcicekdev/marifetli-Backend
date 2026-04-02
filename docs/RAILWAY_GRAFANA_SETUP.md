@@ -85,11 +85,14 @@ Bu repoda Loki/Tempo entegrasyonu opsiyonel olarak eklendi.
 Backend service variables:
 
 - `LOKI_PUSH_URL=http://loki:3100/loki/api/v1/push`
+- `REQUEST_LOGGING_ENABLED=true`
+- `REQUEST_LOGGING_EXCLUDE_PREFIXES=/metrics,/admin,/static,/media,/favicon.ico` (opsiyonel)
 
 Not:
 
 - Bu degisken doluysa Django loglari Loki'ye push edilir.
 - Bos birakilirsa sadece mevcut console/file/db loglama devam eder.
+- `REQUEST_LOGGING_ENABLED=true` oldugunda endpoint bazli access log da Loki'de gorunur.
 
 ### B) Tempo trace (OTLP HTTP)
 

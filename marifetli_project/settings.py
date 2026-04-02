@@ -77,6 +77,16 @@ INSTALLED_APPS = [
     "kids",
 ]
 
+# Request access logging (optional, env ile acilir).
+REQUEST_LOGGING_ENABLED = config("REQUEST_LOGGING_ENABLED", default=False, cast=bool)
+REQUEST_LOGGING_EXCLUDE_PREFIXES = tuple(
+    config(
+        "REQUEST_LOGGING_EXCLUDE_PREFIXES",
+        default="/metrics,/admin,/static,/media,/favicon.ico",
+        cast=Csv(),
+    )
+)
+
 MIDDLEWARE = [
     "django_prometheus.middleware.PrometheusBeforeMiddleware",
     "django.middleware.security.SecurityMiddleware",
@@ -92,6 +102,8 @@ MIDDLEWARE = [
     "users.middleware.ClearSessionBeforeGoogleOAuthMiddleware",
     "django_prometheus.middleware.PrometheusAfterMiddleware",
 ]
+if REQUEST_LOGGING_ENABLED:
+    MIDDLEWARE.append("core.middleware.RequestLoggingMiddleware")
 
 ROOT_URLCONF = "marifetli_project.urls"
 
