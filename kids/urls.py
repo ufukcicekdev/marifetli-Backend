@@ -17,6 +17,10 @@ urlpatterns = [
         views.KidsParentHomeworkSubmissionReviewView.as_view(),
     ),
     path(
+        "parent/homework-submissions/<int:submission_id>/attachments/<int:attachment_id>/",
+        views.KidsParentHomeworkSubmissionAttachmentDetailView.as_view(),
+    ),
+    path(
         "parent/game-policies/<int:student_id>/",
         views.KidsParentGamePolicyDetailView.as_view(),
     ),
@@ -153,6 +157,14 @@ urlpatterns = [
     path(
         "student/homework-submissions/<int:submission_id>/mark-done/",
         views.KidsStudentHomeworkSubmissionMarkDoneView.as_view(),
+    ),
+    path(
+        "student/homework-submissions/<int:submission_id>/attachments/",
+        views.KidsStudentHomeworkSubmissionAttachmentUploadView.as_view(),
+    ),
+    path(
+        "student/homework-submissions/<int:submission_id>/attachments/<int:attachment_id>/",
+        views.KidsStudentHomeworkSubmissionAttachmentDetailView.as_view(),
     ),
     path(
         "student/submissions/for-assignment/",

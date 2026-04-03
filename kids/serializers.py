@@ -26,6 +26,7 @@ from .models import (
     KidsHomework,
     KidsHomeworkAttachment,
     KidsHomeworkSubmission,
+    KidsHomeworkSubmissionAttachment,
     KidsInvite,
     KidsMessage,
     KidsMessageAttachment,
@@ -125,6 +126,27 @@ def _homework_attachment_payloads(request, homework: KidsHomework):
         rows = attachments.all()
     else:
         rows = KidsHomeworkAttachment.objects.filter(homework=homework).order_by("created_at", "id")
+    return [
+        {
+            "id": a.id,
+            "url": _absolute_media_url(request, a.file.url) if getattr(a, "file", None) else "",
+            "original_name": a.original_name,
+            "content_type": a.content_type,
+            "size_bytes": a.size_bytes,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in rows
+    ]
+
+
+def _homework_submission_attachment_payloads(request, submission: KidsHomeworkSubmission):
+    attachments = getattr(submission, "attachments", None)
+    if attachments is not None and hasattr(attachments, "all"):
+        rows = attachments.all()
+    else:
+        rows = KidsHomeworkSubmissionAttachment.objects.filter(submission=submission).order_by(
+            "created_at", "id"
+        )
     return [
         {
             "id": a.id,
@@ -902,6 +924,7 @@ class KidsHomeworkSerializer(serializers.ModelSerializer):
 class KidsHomeworkSubmissionSerializer(serializers.ModelSerializer):
     student = serializers.SerializerMethodField()
     homework = serializers.SerializerMethodField()
+    attachments = serializers.SerializerMethodField()
 
     class Meta:
         model = KidsHomeworkSubmission
@@ -916,6 +939,7 @@ class KidsHomeworkSubmissionSerializer(serializers.ModelSerializer):
             "parent_note",
             "teacher_reviewed_at",
             "teacher_note",
+            "attachments",
             "created_at",
             "updated_at",
         )
@@ -969,6 +993,9 @@ class KidsHomeworkSubmissionSerializer(serializers.ModelSerializer):
             "updated_at": h.updated_at.isoformat() if h.updated_at else None,
         }
 
+    def get_attachments(self, obj):
+        return _homework_submission_attachment_payloads(self.context.get("request"), obj)
+
 
 class KidsHomeworkStudentMarkDoneSerializer(serializers.Serializer):
     note = serializers.CharField(max_length=600, required=False, allow_blank=True)
@@ -1002,6 +1029,18 @@ class KidsHomeworkAttachmentUploadSerializer(serializers.Serializer):
             raise serializers.ValidationError("Görsel dosyası en fazla 10 MB olabilir.")
         if not is_image and size > document_max_size:
             raise serializers.ValidationError("Döküman dosyası en fazla 20 MB olabilir.")
+        return value
+
+
+class KidsHomeworkSubmissionAttachmentUploadSerializer(serializers.Serializer):
+    file = serializers.ImageField(required=True)
+
+    def validate_file(self, value):
+        size = int(getattr(value, "size", 0) or 0)
+        if size <= 0:
+            raise serializers.ValidationError("Dosya boş olamaz.")
+        if size > 10 * 1024 * 1024:
+            raise serializers.ValidationError("Görsel dosyası en fazla 10 MB olabilir.")
         return value
 
 

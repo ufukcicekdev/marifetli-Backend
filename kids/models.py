@@ -692,6 +692,23 @@ class KidsHomeworkSubmission(models.Model):
         ]
 
 
+class KidsHomeworkSubmissionAttachment(models.Model):
+    submission = models.ForeignKey(
+        KidsHomeworkSubmission,
+        on_delete=models.CASCADE,
+        related_name="attachments",
+    )
+    file = models.ImageField(upload_to="kids_homework_submissions/")
+    original_name = models.CharField(max_length=255, blank=True)
+    content_type = models.CharField(max_length=120, blank=True)
+    size_bytes = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "kids_homework_submission_attachments"
+        ordering = ["created_at", "id"]
+
+
 class KidsUserBadge(models.Model):
     """Öğrenci rozetleri; key örn. first_submit, growth_6, teacher_pick_42."""
 

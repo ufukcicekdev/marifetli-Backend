@@ -59,6 +59,7 @@ from .models import (
     KidsHomework,
     KidsHomeworkAttachment,
     KidsHomeworkSubmission,
+    KidsHomeworkSubmissionAttachment,
     KidsInvite,
     KidsMessage,
     KidsMessageAttachment,
@@ -131,6 +132,7 @@ from .serializers import (
     KidsSchoolYearProfileWriteSerializer,
     KidsHomeworkParentReviewSerializer,
     KidsHomeworkAttachmentUploadSerializer,
+    KidsHomeworkSubmissionAttachmentUploadSerializer,
     KidsHomeworkSerializer,
     KidsHomeworkStudentMarkDoneSerializer,
     KidsHomeworkSubmissionSerializer,
@@ -439,7 +441,7 @@ def _parent_child_overview_dict(student: KidsUser, request=None) -> dict:
     hw_qs = (
         KidsHomeworkSubmission.objects.filter(student=student)
         .select_related("homework", "homework__kids_class", "homework__created_by")
-        .prefetch_related("homework__attachments")
+        .prefetch_related("homework__attachments", "attachments")
         .order_by("-updated_at", "-id")[:60]
     )
     for sub in hw_qs:
@@ -488,6 +490,16 @@ def _parent_child_overview_dict(student: KidsUser, request=None) -> dict:
                     }
                     for att in sub.homework.attachments.all()
                 ],
+                "submission_attachments": [
+                    {
+                        "id": att.id,
+                        "url": _absolute_media_url(request, att.file.url) if getattr(att, "file", None) else "",
+                        "original_name": att.original_name,
+                        "content_type": att.content_type,
+                        "size_bytes": att.size_bytes,
+                    }
+                    for att in sub.attachments.all()
+                ],
             }
         )
     pending_hw_qs = (
@@ -496,6 +508,7 @@ def _parent_child_overview_dict(student: KidsUser, request=None) -> dict:
             status=KidsHomeworkSubmission.Status.STUDENT_DONE,
         )
         .select_related("homework", "homework__kids_class")
+        .prefetch_related("attachments")
         .order_by("-student_done_at", "-updated_at")[:20]
     )
     for sub in pending_hw_qs:
@@ -510,6 +523,16 @@ def _parent_child_overview_dict(student: KidsUser, request=None) -> dict:
                 "student_marked_done_at": (
                     sub.student_done_at.isoformat() if sub.student_done_at else None
                 ),
+                "submission_attachments": [
+                    {
+                        "id": att.id,
+                        "url": _absolute_media_url(request, att.file.url) if getattr(att, "file", None) else "",
+                        "original_name": att.original_name,
+                        "content_type": att.content_type,
+                        "size_bytes": att.size_bytes,
+                    }
+                    for att in sub.attachments.all()
+                ],
             }
         )
 
@@ -2828,7 +2851,7 @@ class KidsHomeworkSubmissionsByHomeworkView(KidsAuthenticatedMixin, APIView):
         qs = (
             KidsHomeworkSubmission.objects.filter(homework_id=homework_id)
             .select_related("student", "homework", "homework__kids_class", "homework__created_by")
-            .prefetch_related("homework__attachments")
+            .prefetch_related("homework__attachments", "attachments")
             .order_by("student__first_name", "student__last_name", "student_id")
         )
         rows = list(qs)
@@ -2876,7 +2899,7 @@ class KidsTeacherHomeworkSubmissionDetailView(KidsAuthenticatedMixin, APIView):
         rows = list(
             KidsHomeworkSubmission.objects.filter(homework_id=homework_id)
             .select_related("student", "homework", "homework__kids_class", "homework__created_by")
-            .prefetch_related("homework__attachments")
+            .prefetch_related("homework__attachments", "attachments")
             .order_by("student__first_name", "student__last_name", "student_id")
         )
         status_counts = {}
@@ -2919,7 +2942,7 @@ class KidsTeacherHomeworkInboxView(KidsAuthenticatedMixin, APIView):
             )
             .distinct()
             .select_related("student", "homework", "homework__kids_class", "homework__created_by")
-            .prefetch_related("homework__attachments")
+            .prefetch_related("homework__attachments", "attachments")
             .order_by("-parent_reviewed_at", "-updated_at")
         )
         return Response(KidsHomeworkSubmissionSerializer(qs, many=True, context={"request": request}).data)
@@ -2939,7 +2962,7 @@ class KidsTeacherHomeworkSubmissionReviewView(KidsAuthenticatedMixin, APIView):
                 pk=submission_id,
             )
             .select_related("student", "homework", "homework__kids_class", "homework__created_by")
-            .prefetch_related("homework__attachments")
+            .prefetch_related("homework__attachments", "attachments")
             .first()
         )
         if not sub:
@@ -2987,7 +3010,7 @@ class KidsStudentHomeworkListView(KidsAuthenticatedMixin, APIView):
                 homework__is_published=True,
             )
             .select_related("homework", "homework__kids_class", "homework__created_by")
-            .prefetch_related("homework__attachments")
+            .prefetch_related("homework__attachments", "attachments")
             .order_by("-homework__due_at", "-id")
         )
         return Response(KidsHomeworkSubmissionSerializer(qs, many=True, context={"request": request}).data)
@@ -3006,7 +3029,7 @@ class KidsStudentHomeworkSubmissionMarkDoneView(KidsAuthenticatedMixin, APIView)
                 homework__is_published=True,
             )
             .select_related("homework", "homework__created_by")
-            .prefetch_related("homework__attachments")
+            .prefetch_related("homework__attachments", "attachments")
             .first()
         )
         if not sub:
@@ -3046,6 +3069,94 @@ class KidsStudentHomeworkSubmissionMarkDoneView(KidsAuthenticatedMixin, APIView)
         return Response(KidsHomeworkSubmissionSerializer(sub, context={"request": request}).data)
 
 
+class KidsStudentHomeworkSubmissionAttachmentUploadView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, submission_id):
+        if not is_kids_student_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        sub = (
+            KidsHomeworkSubmission.objects.filter(
+                pk=submission_id,
+                student=request.user,
+                homework__is_published=True,
+            )
+            .select_related("homework", "homework__kids_class", "homework__created_by")
+            .prefetch_related("homework__attachments", "attachments")
+            .first()
+        )
+        if not sub:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        if sub.status == KidsHomeworkSubmission.Status.TEACHER_APPROVED:
+            return Response(
+                {"detail": "Öğretmen onaylanan ödeve yeni görsel eklenemez."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        ser = KidsHomeworkSubmissionAttachmentUploadSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        f = ser.validated_data["file"]
+        att = KidsHomeworkSubmissionAttachment.objects.create(
+            submission=sub,
+            file=f,
+            original_name=(getattr(f, "name", "") or "")[:255],
+            content_type=(getattr(f, "content_type", "") or "")[:120],
+            size_bytes=int(getattr(f, "size", 0) or 0),
+        )
+        sub = (
+            KidsHomeworkSubmission.objects.filter(pk=sub.pk)
+            .select_related("homework", "homework__kids_class", "homework__created_by")
+            .prefetch_related("homework__attachments", "attachments")
+            .first()
+        )
+        return Response(
+            {
+                "attachment_id": att.id,
+                "submission": KidsHomeworkSubmissionSerializer(sub, context={"request": request}).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class KidsStudentHomeworkSubmissionAttachmentDetailView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, submission_id, attachment_id):
+        if not is_kids_student_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        sub = (
+            KidsHomeworkSubmission.objects.filter(
+                pk=submission_id,
+                student=request.user,
+                homework__is_published=True,
+            )
+            .select_related("homework", "homework__kids_class", "homework__created_by")
+            .prefetch_related("homework__attachments", "attachments")
+            .first()
+        )
+        if not sub:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        if sub.status == KidsHomeworkSubmission.Status.TEACHER_APPROVED:
+            return Response(
+                {"detail": "Öğretmen onaylanan ödevden görsel silinemez."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        att = KidsHomeworkSubmissionAttachment.objects.filter(
+            pk=attachment_id,
+            submission_id=sub.pk,
+        ).first()
+        if not att:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        att.file.delete(save=False)
+        att.delete()
+        sub = (
+            KidsHomeworkSubmission.objects.filter(pk=sub.pk)
+            .select_related("homework", "homework__kids_class", "homework__created_by")
+            .prefetch_related("homework__attachments", "attachments")
+            .first()
+        )
+        return Response({"submission": KidsHomeworkSubmissionSerializer(sub, context={"request": request}).data})
+
+
 class KidsParentHomeworkPendingListView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsParent]
 
@@ -3056,7 +3167,7 @@ class KidsParentHomeworkPendingListView(KidsAuthenticatedMixin, APIView):
                 status=KidsHomeworkSubmission.Status.STUDENT_DONE,
             )
             .select_related("student", "homework", "homework__kids_class", "homework__created_by")
-            .prefetch_related("homework__attachments")
+            .prefetch_related("homework__attachments", "attachments")
             .order_by("-student_done_at", "-updated_at")
         )
         return Response(KidsHomeworkSubmissionSerializer(qs, many=True, context={"request": request}).data)
@@ -3069,7 +3180,7 @@ class KidsParentHomeworkSubmissionReviewView(KidsAuthenticatedMixin, APIView):
         sub = (
             KidsHomeworkSubmission.objects.filter(pk=submission_id)
             .select_related("student", "homework", "homework__kids_class", "homework__created_by")
-            .prefetch_related("homework__attachments")
+            .prefetch_related("homework__attachments", "attachments")
             .first()
         )
         if not sub:
@@ -3106,6 +3217,37 @@ class KidsParentHomeworkSubmissionReviewView(KidsAuthenticatedMixin, APIView):
             sid = sub.pk
             transaction.on_commit(lambda s=sid: notify_teacher_homework_parent_approved(s))
         return Response(KidsHomeworkSubmissionSerializer(sub, context={"request": request}).data)
+
+
+class KidsParentHomeworkSubmissionAttachmentDetailView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsParent]
+
+    def delete(self, request, submission_id, attachment_id):
+        sub = (
+            KidsHomeworkSubmission.objects.filter(pk=submission_id)
+            .select_related("student", "homework", "homework__kids_class", "homework__created_by")
+            .prefetch_related("homework__attachments", "attachments")
+            .first()
+        )
+        if not sub:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        if sub.student.parent_account_id != request.user.id:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        att = KidsHomeworkSubmissionAttachment.objects.filter(
+            pk=attachment_id,
+            submission_id=sub.pk,
+        ).first()
+        if not att:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        att.file.delete(save=False)
+        att.delete()
+        sub = (
+            KidsHomeworkSubmission.objects.filter(pk=sub.pk)
+            .select_related("student", "homework", "homework__kids_class", "homework__created_by")
+            .prefetch_related("homework__attachments", "attachments")
+            .first()
+        )
+        return Response({"submission": KidsHomeworkSubmissionSerializer(sub, context={"request": request}).data})
 
 
 class KidsAssignmentSubmissionsDetailView(KidsAuthenticatedMixin, APIView):
