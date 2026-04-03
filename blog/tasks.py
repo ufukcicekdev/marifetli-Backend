@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from html import escape
 
 from celery import shared_task
 from django.conf import settings
@@ -27,23 +28,120 @@ def _get_blog_author():
 def _parse_blog_json(raw_text: str) -> dict:
     if not raw_text:
         return {}
-    cleaned = re.sub(r"^```(?:json)?\s*\n?", "", raw_text.strip())
-    cleaned = re.sub(r"\n?```\s*$", "", cleaned).strip()
+    cleaned = _strip_code_fences(raw_text)
     try:
         data = json.loads(cleaned)
         if isinstance(data, dict):
             return data
     except json.JSONDecodeError:
         pass
-    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
-    if match:
-        try:
-            data = json.loads(match.group(0))
-            if isinstance(data, dict):
-                return data
-        except json.JSONDecodeError:
-            return {}
+    # İlk tam JSON objesini bul (string içindeki { } karakterlerini görmezden gel).
+    start = cleaned.find("{")
+    if start >= 0:
+        i = start
+        depth = 0
+        in_string = False
+        escape_on = False
+        quote = '"'
+        while i < len(cleaned):
+            c = cleaned[i]
+            if in_string:
+                if escape_on:
+                    escape_on = False
+                elif c == "\\":
+                    escape_on = True
+                elif c == quote:
+                    in_string = False
+            else:
+                if c in ('"', "'"):
+                    in_string = True
+                    quote = c
+                elif c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        chunk = cleaned[start : i + 1]
+                        try:
+                            data = json.loads(chunk)
+                            if isinstance(data, dict):
+                                return data
+                        except json.JSONDecodeError:
+                            break
+            i += 1
+    # JSON bozulmuşsa kritik alanları regex ile kurtar.
+    def _pull(key: str) -> str:
+        m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', cleaned, flags=re.DOTALL)
+        if m:
+            return m.group(1).strip()
+        m2 = re.search(rf'"{key}"\s*:\s*"(.+)$', cleaned, flags=re.DOTALL)
+        if m2:
+            return m2.group(1).strip()
+        return ""
+
+    title = _pull("title")[:200]
+    excerpt = _pull("excerpt")[:280]
+    content = _pull("content").strip()
+    if title or excerpt or content:
+        return {"title": title, "excerpt": excerpt, "content": content}
     return {}
+
+
+def _strip_code_fences(raw_text: str) -> str:
+    if not raw_text:
+        return ""
+    cleaned = re.sub(r"^```(?:json|markdown|md|html|text)?\s*\n?", "", raw_text.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r"\n?```\s*$", "", cleaned).strip()
+    return cleaned
+
+
+def _text_to_html(raw_text: str) -> str:
+    cleaned = _strip_code_fences(raw_text)
+    if not cleaned:
+        return ""
+    # Zaten HTML üretildiyse olduğu gibi kullan.
+    if re.search(r"<(h[1-6]|p|ul|ol|li|strong|em|blockquote|img|a)\b", cleaned, flags=re.IGNORECASE):
+        return cleaned
+    blocks = [b.strip() for b in re.split(r"\n\s*\n+", cleaned) if b.strip()]
+    html_parts: list[str] = []
+    for block in blocks:
+        lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+        if not lines:
+            continue
+        if all(ln.startswith(("- ", "* ")) for ln in lines):
+            items = "".join(f"<li>{escape(ln[2:].strip())}</li>" for ln in lines if ln[2:].strip())
+            if items:
+                html_parts.append(f"<ul>{items}</ul>")
+            continue
+        text = " ".join(lines)
+        html_parts.append(f"<p>{escape(text)}</p>")
+    return "\n".join(html_parts)
+
+
+def _first_nonempty_line(raw_text: str) -> str:
+    for ln in _strip_code_fences(raw_text).splitlines():
+        s = ln.strip()
+        if s and s not in {"{", "}", "[", "]"}:
+            return s
+    return ""
+
+
+def _fallback_payload_from_raw(topic: str, raw_text: str) -> dict:
+    cleaned = _strip_code_fences(raw_text)
+    if not cleaned:
+        return {}
+    heading = re.search(r"^\s{0,3}#{1,6}\s+(.+)$", cleaned, flags=re.MULTILINE)
+    title_candidate = (heading.group(1).strip() if heading else _first_nonempty_line(cleaned))[:200]
+    title = title_candidate or topic
+    content = _text_to_html(cleaned)
+    plain = re.sub(r"<[^>]+>", " ", content)
+    plain = re.sub(r"\s+", " ", plain).strip()
+    excerpt = plain[:280]
+    return {
+        "title": title,
+        "excerpt": excerpt,
+        "content": content,
+    }
 
 
 def _build_prompt(topic: str) -> str:
@@ -96,6 +194,8 @@ def generate_blog_from_queue():
     prompt = _build_prompt(topic_row.topic)
     raw = _call_gemini(prompt, max_tokens=2200)
     parsed = _parse_blog_json(raw)
+    if not parsed:
+        parsed = _fallback_payload_from_raw(topic_row.topic, raw)
     title = (parsed.get("title") or topic_row.topic).strip()[:200]
     excerpt = (parsed.get("excerpt") or "").strip()[:280]
     content = (parsed.get("content") or "").strip()

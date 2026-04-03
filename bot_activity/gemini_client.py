@@ -83,18 +83,30 @@ def _call_gemini(prompt: str, max_tokens: int = 300) -> str:
                 r.raise_for_status()
             r.raise_for_status()
             data = r.json()
-            # Gemini yanıt metni: candidates[0].content.parts[0].text (yapı değişirse diye birkaç yol dene)
+            # Gemini yanıt metni: mümkünse tüm candidate/parts text alanlarını topla.
             text = ""
             try:
                 cands = data.get("candidates") or []
-                if cands:
-                    c0 = cands[0]
-                    content = c0.get("content") or {}
-                    parts = content.get("parts") or []
-                    if parts:
-                        text = (parts[0].get("text") or "").strip()
-                    if not text and "text" in c0:
-                        text = (c0.get("text") or "").strip()
+                all_parts = []
+                finish_reasons = []
+                for cand in cands:
+                    if isinstance(cand, dict):
+                        fr = cand.get("finishReason")
+                        if fr:
+                            finish_reasons.append(str(fr))
+                        content = cand.get("content") or {}
+                        parts = content.get("parts") or []
+                        for part in parts:
+                            if isinstance(part, dict):
+                                t = (part.get("text") or "").strip()
+                                if t:
+                                    all_parts.append(t)
+                        # Bazı sürümlerde candidate.text kullanılabiliyor
+                        ct = (cand.get("text") or "").strip() if isinstance(cand, dict) else ""
+                        if ct:
+                            all_parts.append(ct)
+                if all_parts:
+                    text = "\n".join(all_parts).strip()
             except (IndexError, KeyError, AttributeError, TypeError):
                 pass
             if not text and isinstance(data, dict):
@@ -104,9 +116,12 @@ def _call_gemini(prompt: str, max_tokens: int = 300) -> str:
                         text = data[key].strip()
                         break
             if not text:
+                prompt_feedback = data.get("promptFeedback") if isinstance(data, dict) else None
                 logger.warning(
-                    "Gemini 200 OK ama metin boş; response keys: %s",
+                    "Gemini 200 OK ama metin boş; response keys: %s, finish_reasons=%s, prompt_feedback=%s",
                     list(data.keys()) if isinstance(data, dict) else type(data),
+                    finish_reasons if "finish_reasons" in locals() else [],
+                    prompt_feedback,
                 )
             return text
         except requests.exceptions.HTTPError as e:
