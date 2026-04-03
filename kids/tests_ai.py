@@ -86,10 +86,11 @@ def _gemini_generate(parts: list[dict[str, Any]]) -> str:
     return "\n".join(joined).strip()
 
 
-def _validate_questions(payload: dict[str, Any]) -> dict[str, Any]:
+def _validate_questions(payload: dict[str, Any], *, num_source_pages: int = 1) -> dict[str, Any]:
     questions_raw = payload.get("questions")
     if not isinstance(questions_raw, list) or not questions_raw:
         raise ValueError("AI yanıtında soru listesi bulunamadı.")
+    num_source_pages = max(1, int(num_source_pages or 1))
     cleaned_questions: list[dict[str, Any]] = []
     for i, row in enumerate(questions_raw, start=1):
         if not isinstance(row, dict):
@@ -122,6 +123,12 @@ def _validate_questions(payload: dict[str, Any]) -> dict[str, Any]:
             answer_key_raw = ""
         if answer_key_raw and answer_key_raw not in [c["key"] for c in cleaned_choices]:
             answer_key_raw = ""
+        raw_page = row.get("source_page_index") or row.get("source_page_order") or row.get("page")
+        try:
+            page_ord = int(raw_page) if raw_page is not None and str(raw_page).strip() != "" else 1
+        except (TypeError, ValueError):
+            page_ord = 1
+        page_ord = max(1, min(num_source_pages, page_ord))
         cleaned_questions.append(
             {
                 "order": i,
@@ -131,6 +138,7 @@ def _validate_questions(payload: dict[str, Any]) -> dict[str, Any]:
                 "choices": cleaned_choices,
                 "correct_choice_key": answer_key_raw,
                 "points": float(row.get("points") or 1.0),
+                "source_page_order": page_ord,
             }
         )
     if not cleaned_questions:
@@ -147,12 +155,19 @@ def _validate_questions(payload: dict[str, Any]) -> dict[str, Any]:
 def extract_test_from_images(files: list[Any]) -> dict[str, Any]:
     if not files:
         raise ValueError("En az bir görsel yüklenmeli.")
+    n_pages = len(files)
     parts: list[dict[str, Any]] = [
         {
             "text": (
                 "You are extracting Turkish multiple choice test questions from uploaded images. "
+                f"The images are ordered: first image = page 1, second = page 2, ... total {n_pages} page(s). "
+                "For EACH question you MUST set source_page_index to the 1-based index of the image that question "
+                "primarily comes from (1 to "
+                f"{n_pages}). "
                 "Return ONLY valid JSON with this shape: "
-                '{"title":"...","instructions":"...","questions":[{"stem":"...","topic":"...","subtopic":"...","choices":[{"text":"..."},{"text":"..."}],"correct_choice_key":"A"}]}. '
+                '{"title":"...","instructions":"...","questions":['
+                '{"stem":"...","topic":"...","subtopic":"...","source_page_index":1,'
+                '"choices":[{"text":"..."},{"text":"..."}],"correct_choice_key":"A"}]}. '
                 "Rules: 2 to 5 choices per question, no markdown, no commentary."
             )
         }
@@ -180,4 +195,4 @@ def extract_test_from_images(files: list[Any]) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         logger.warning("Tests AI raw response: %s", text[:700])
         raise ValueError("AI yanıtı JSON formatında ayrıştırılamadı.")
-    return _validate_questions(parsed)
+    return _validate_questions(parsed, num_source_pages=len(files))

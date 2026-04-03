@@ -2,6 +2,7 @@
 Gemini API ile doğal dilde soru ve cevap metinleri üretir.
 Bot kullanıcıların insan gibi yazması için kısa, samimi Türkçe üretir.
 """
+import base64
 import json
 import logging
 import random
@@ -22,18 +23,47 @@ MAX_RETRIES = getattr(settings, "GEMINI_RATE_LIMIT_RETRIES", 3)
 RETRY_BACKOFF_BASE = 2  # saniye
 
 
-def _call_gemini(prompt: str, max_tokens: int = 300) -> str:
-    """Gemini API'ye tek bir prompt gönderir, yanıt metnini döner. 429'da backoff ile yeniden dener."""
+def _call_gemini(
+    prompt: str,
+    max_tokens: int = 300,
+    *,
+    image_bytes: bytes | None = None,
+    image_mime: str | None = None,
+) -> str:
+    """Gemini API'ye metin ve isteğe bağlı tek görsel gönderir. 429'da backoff ile yeniden dener."""
     api_key = getattr(settings, "GEMINI_API_KEY", "") or ""
     if not api_key:
         logger.warning("GEMINI_API_KEY tanımlı değil, bot içerik üretilemiyor.")
         return ""
 
+    # REST v1beta JSON, proto3 eşlemesi: görsel alanları camelCase olmalı (inlineData / mimeType).
+    # snake_case (inline_data) bazı uçlarda yok sayılıp sadece metin işleniyor; görsel yokmuş gibi uydurma üretilebiliyor.
+    b64: str | None = None
+    mime: str | None = None
+    if image_bytes:
+        mime = (image_mime or "image/jpeg").split(";")[0].strip().lower() or "image/jpeg"
+        b64 = base64.b64encode(image_bytes).decode("ascii")
+
+    if b64 and mime:
+        parts: list[dict] = [
+            {
+                "inlineData": {
+                    "mimeType": mime,
+                    "data": b64,
+                }
+            },
+            {"text": prompt},
+        ]
+        gen_temperature = 0.35
+    else:
+        parts = [{"text": prompt}]
+        gen_temperature = 0.85
+
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
+        "contents": [{"parts": parts}],
         "generationConfig": {
             "maxOutputTokens": max_tokens,
-            "temperature": 0.85,
+            "temperature": gen_temperature,
             "topP": 0.9,
         },
     }
@@ -43,13 +73,14 @@ def _call_gemini(prompt: str, max_tokens: int = 300) -> str:
         "X-goog-api-key": api_key,
     }
     last_error = None
+    timeout_sec = 90 if image_bytes else 30
 
     for attempt in range(MAX_RETRIES + 1):
         try:
             r = requests.post(
                 GEMINI_API_URL,
                 json=payload,
-                timeout=30,
+                timeout=timeout_sec,
                 headers=headers,
             )
             if r.status_code == 429:

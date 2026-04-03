@@ -9,6 +9,9 @@ from .models import (
     KidsChallengeMember,
     KidsClass,
     KidsEnrollment,
+    KidsKindergartenClassDayPlan,
+    KidsKindergartenDailyRecord,
+    KidsKindergartenMonthlyReportLog,
     KidsFCMDeviceToken,
     KidsFreestylePost,
     KidsGame,
@@ -133,9 +136,32 @@ class KidsSchoolYearProfileAdmin(admin.ModelAdmin):
 
 @admin.register(KidsClass)
 class KidsClassAdmin(admin.ModelAdmin):
-    list_display = ("name", "academic_year_label", "school", "teacher", "created_at")
+    list_display = ("name", "class_kind", "academic_year_label", "school", "teacher", "created_at")
     search_fields = ("name", "academic_year_label", "teacher__email", "school__name")
-    list_filter = ("teacher", "school")
+    list_filter = ("teacher", "school", "class_kind")
+
+
+@admin.register(KidsKindergartenClassDayPlan)
+class KidsKindergartenClassDayPlanAdmin(admin.ModelAdmin):
+    list_display = ("kids_class", "plan_date", "updated_at")
+    list_filter = ("kids_class",)
+    search_fields = ("kids_class__name", "plan_text")
+    raw_id_fields = ("kids_class", "updated_by")
+
+
+@admin.register(KidsKindergartenDailyRecord)
+class KidsKindergartenDailyRecordAdmin(admin.ModelAdmin):
+    list_display = ("student", "kids_class", "record_date", "present", "meal_ok", "nap_ok", "digest_sent_at")
+    list_filter = ("kids_class", "record_date", "present")
+    search_fields = ("student__email", "student__first_name", "student__last_name")
+    raw_id_fields = ("kids_class", "student", "present_marked_by", "meal_marked_by", "nap_marked_by")
+
+
+@admin.register(KidsKindergartenMonthlyReportLog)
+class KidsKindergartenMonthlyReportLogAdmin(admin.ModelAdmin):
+    list_display = ("student", "kids_class", "year", "month", "absence_count", "sent_at")
+    list_filter = ("year", "month", "kids_class")
+    raw_id_fields = ("student", "kids_class")
 
 
 @admin.register(KidsEnrollment)

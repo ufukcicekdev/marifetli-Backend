@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import challenge_views, test_views, views
+from . import challenge_views, kindergarten_views, test_views, views
 
 urlpatterns = [
     path("auth/login/", views.KidsLoginView.as_view()),
@@ -11,6 +11,10 @@ urlpatterns = [
     path("auth/parent/verify-password/", views.KidsParentPasswordVerifyView.as_view()),
     path("auth/parent/switch-student/", views.KidsParentSwitchStudentView.as_view()),
     path("parent/children-overview/", views.KidsParentChildrenOverviewView.as_view()),
+    path(
+        "parent/kindergarten/records/",
+        kindergarten_views.KidsParentKindergartenRecordsView.as_view(),
+    ),
     path("parent/homeworks/pending/", views.KidsParentHomeworkPendingListView.as_view()),
     path(
         "parent/homework-submissions/<int:submission_id>/review/",
@@ -86,6 +90,26 @@ urlpatterns = [
     path(
         "classes/<int:class_id>/teachers/<int:teacher_user_id>/",
         views.KidsClassTeacherDetailView.as_view(),
+    ),
+    path(
+        "classes/<int:class_id>/kindergarten/day-plan/",
+        kindergarten_views.KidsKindergartenDayPlanView.as_view(),
+    ),
+    path(
+        "classes/<int:class_id>/kindergarten/daily-board/",
+        kindergarten_views.KidsKindergartenDailyBoardView.as_view(),
+    ),
+    path(
+        "classes/<int:class_id>/kindergarten/bulk/",
+        kindergarten_views.KidsKindergartenBulkView.as_view(),
+    ),
+    path(
+        "classes/<int:class_id>/kindergarten/daily/<int:student_id>/",
+        kindergarten_views.KidsKindergartenDailyRecordPatchView.as_view(),
+    ),
+    path(
+        "classes/<int:class_id>/kindergarten/daily/<int:student_id>/send-end-of-day/",
+        kindergarten_views.KidsKindergartenSendEndOfDayView.as_view(),
     ),
     path("classes/<int:class_id>/students/", views.KidsEnrollmentListView.as_view()),
     path(

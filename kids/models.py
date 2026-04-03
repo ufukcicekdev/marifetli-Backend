@@ -18,6 +18,14 @@ class KidsLanguageCode(models.TextChoices):
     GE = "ge", "Deutsch"
 
 
+class KidsClassKind(models.TextChoices):
+    """Sınıf programı; anaokulu ve anasınıfında günlük devam / yemek / uyku kayıtları açılır."""
+
+    STANDARD = "standard", "Standart"
+    KINDERGARTEN = "kindergarten", "Anaokulu"
+    ANASINIFI = "anasinifi", "Anasınıfı"
+
+
 class KidsUser(models.Model):
     """Yalnızca çocuk (öğrenci) hesapları. Veli ve öğretmen `users.User` + `kids_portal_role`."""
 
@@ -217,6 +225,14 @@ class KidsClass(models.Model):
         default=KidsLanguageCode.TR,
         help_text="Sınıfa bağlı öğrenciler bu dili kullanır.",
     )
+    class_kind = models.CharField(
+        "sınıf türü",
+        max_length=24,
+        choices=KidsClassKind.choices,
+        default=KidsClassKind.STANDARD,
+        db_index=True,
+        help_text="Anaokulu ve anasınıfı: veliye günlük devam, ders/etkinlik özeti ve gün sonu bildirimleri.",
+    )
     school = models.ForeignKey(
         KidsSchool,
         on_delete=models.PROTECT,
@@ -266,6 +282,155 @@ class KidsClassTeacher(models.Model):
 
     def __str__(self):
         return f"{self.kids_class_id}:{self.teacher_id}:{self.subject}"
+
+
+class KidsKindergartenClassDayPlan(models.Model):
+    """Anaokulu / anasınıfı: belirli bir gün için sınıfta yapılacak ders / etkinlik metni (veli «okula geldi» bildiriminde kullanılır)."""
+
+    kids_class = models.ForeignKey(
+        KidsClass,
+        on_delete=models.CASCADE,
+        related_name="kg_day_plans",
+    )
+    plan_date = models.DateField(db_index=True)
+    plan_text = models.TextField(max_length=8000, blank=True, default="")
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="kg_day_plans_updated",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_kg_class_day_plans"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["kids_class", "plan_date"],
+                name="kids_kg_dayplan_class_date_uniq",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.kids_class_id} {self.plan_date}"
+
+
+class KidsKindergartenDailyRecord(models.Model):
+    """Anaokulu veya anasınıfı öğrenci günlük kartı: devam, yemek, uyku, gün sonu notu."""
+
+    kids_class = models.ForeignKey(
+        KidsClass,
+        on_delete=models.CASCADE,
+        related_name="kg_daily_records",
+    )
+    student = models.ForeignKey(
+        "KidsUser",
+        on_delete=models.CASCADE,
+        related_name="kg_daily_records",
+        limit_choices_to={"role": KidsUserRole.STUDENT},
+    )
+    record_date = models.DateField(db_index=True)
+    present = models.BooleanField(
+        "okula geldi",
+        null=True,
+        blank=True,
+        help_text="True=geldi, False=gelmedi, boş=henüz işaretlenmedi.",
+    )
+    present_marked_at = models.DateTimeField(null=True, blank=True)
+    present_marked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="kg_present_marked",
+    )
+    meal_ok = models.BooleanField("yemek yedi", null=True, blank=True)
+    meal_marked_at = models.DateTimeField(null=True, blank=True)
+    meal_marked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="kg_meal_marked",
+    )
+    nap_ok = models.BooleanField("uyudu", null=True, blank=True)
+    nap_marked_at = models.DateTimeField(null=True, blank=True)
+    nap_marked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="kg_nap_marked",
+    )
+    meal_slots = models.JSONField(
+        "öğün dilimleri",
+        blank=True,
+        default=list,
+        help_text='Örn. [{"label": "Kahvaltı", "ok": true}, ...]. Boşsa yalnızca meal_ok özeti kullanılır.',
+    )
+    nap_slots = models.JSONField(
+        "uyku dilimleri",
+        blank=True,
+        default=list,
+        help_text='Örn. [{"label": "Öğle uykusu", "ok": true}, ...]. Boşsa yalnızca nap_ok özeti kullanılır.',
+    )
+    teacher_day_note = models.TextField(max_length=2000, blank=True, default="")
+    digest_sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Gün sonu veli bildirimi gönderildiğinde doldurulur.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_kg_daily_records"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["kids_class", "student", "record_date"],
+                name="kids_kg_daily_class_student_date_uniq",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["kids_class", "record_date"]),
+            models.Index(fields=["student", "record_date"]),
+        ]
+
+    def __str__(self):
+        return f"{self.student_id} {self.record_date}"
+
+
+class KidsKindergartenMonthlyReportLog(models.Model):
+    """Ay sonu devamsızlık bildiriminin bir kez gönderildiğini izler."""
+
+    student = models.ForeignKey(
+        "KidsUser",
+        on_delete=models.CASCADE,
+        related_name="kg_monthly_reports",
+        limit_choices_to={"role": KidsUserRole.STUDENT},
+    )
+    kids_class = models.ForeignKey(
+        KidsClass,
+        on_delete=models.CASCADE,
+        related_name="kg_monthly_reports",
+    )
+    year = models.PositiveSmallIntegerField()
+    month = models.PositiveSmallIntegerField()
+    absence_count = models.PositiveSmallIntegerField()
+    sent_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "kids_kg_monthly_report_logs"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["student", "kids_class", "year", "month"],
+                name="kids_kg_monthly_log_uniq",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.student_id} {self.year}-{self.month:02d}"
 
 
 class KidsSubject(models.Model):
@@ -1023,6 +1188,16 @@ class KidsTestQuestion(models.Model):
     choices = models.JSONField(default=list, blank=True)
     correct_choice_key = models.CharField(max_length=8)
     points = models.FloatField(default=1.0)
+    # Öğretmenin yüklediği kaynak sayfa görseli (AI çıkarımı veya manuel eşleme).
+    source_image = models.ForeignKey(
+        "KidsTestSourceImage",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="questions",
+    )
+    # İleride bbox, OCR güveni vb. için genişletilebilir yapı.
+    source_meta = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -1459,6 +1634,9 @@ class KidsNotification(models.Model):
         ASSIGNMENT_DUE_SOON = "kids_assignment_due_soon", "Son teslim yaklaşıyor"
         ASSIGNMENT_LATE_SUBMITTED = "kids_assignment_late_submitted", "Geç teslim alındı"
         ASSIGNMENT_GRADED_WITH_RUBRIC = "kids_assignment_graded_with_rubric", "Rubrik değerlendirmesi yayınlandı"
+        KG_CHILD_ARRIVED = "kids_kg_child_arrived", "Anaokulu: çocuk okula geldi"
+        KG_END_OF_DAY = "kids_kg_end_of_day", "Anaokulu: gün sonu özeti"
+        KG_MONTHLY_ABSENCE = "kids_kg_monthly_absence", "Anaokulu: aylık devamsızlık"
 
     recipient_student = models.ForeignKey(
         KidsUser,
@@ -1538,6 +1716,13 @@ class KidsNotification(models.Model):
         null=True,
         blank=True,
         related_name="kids_notifications",
+    )
+    kindergarten_daily_record = models.ForeignKey(
+        "KidsKindergartenDailyRecord",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="notifications",
     )
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)

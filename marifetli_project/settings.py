@@ -644,6 +644,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "kids.tasks.notify_kids_assignment_windows_opened",
         "schedule": crontab(minute="*/5"),
     },
+    "kids-kindergarten-monthly-absence": {
+        "task": "kids.tasks.kindergarten_monthly_absence_digest",
+        "schedule": crontab(hour=7, minute=15, day_of_month=1),
+    },
     "blog-generate-from-queue": {
         "task": "blog.generate_blog_from_queue",
         "schedule": crontab(minute=30, hour=10, day_of_month="*/2"),  # Iki gunde bir

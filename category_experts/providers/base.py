@@ -26,9 +26,12 @@ class ExpertLLMProvider(Protocol):
         subcategory_name: str | None,
         expert_display_name: str,
         extra_instructions: str,
+        attachment_bytes: bytes | None = None,
+        attachment_mime: str | None = None,
     ) -> str:
         """
         Uzman karakteriyle Türkçe yanıt döndürür.
+        attachment_bytes / attachment_mime: isteğe bağlı tek görsel (JPEG/PNG/WebP/GIF).
         Boş string: hata veya yapılandırma eksikliği.
         """
         ...

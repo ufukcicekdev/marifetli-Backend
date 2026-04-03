@@ -5,6 +5,7 @@ URL: settings.CATEGORY_EXPERT_CHAT_URL (veya MODERATION_LLM_URL'den /chat türet
 """
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Any
 
@@ -41,6 +42,8 @@ class ModeratorChatExpertProvider:
         subcategory_name: str | None,
         expert_display_name: str,
         extra_instructions: str,
+        attachment_bytes: bytes | None = None,
+        attachment_mime: str | None = None,
     ) -> str:
         url = (getattr(settings, "CATEGORY_EXPERT_CHAT_URL", "") or "").strip()
         if not url:
@@ -55,12 +58,19 @@ class ModeratorChatExpertProvider:
         )
         extra = f"\nEk yönergeler (admin):\n{extra_instructions}\n" if (extra_instructions or "").strip() else ""
 
+        att_intro = ""
+        if attachment_bytes and attachment_mime:
+            att_intro = (
+                "\nKullanıcı bir görsel eki göndermiştir. İstek gövdesindeki `attachment_base64` ve "
+                "`attachment_mime_type` alanlarını kullanarak görseli incele ve soruya göre yanıt ver.\n"
+            )
+
         # Tek "message" alanında tam bağlam (Gemini prompt ile aynı mantık)
         message = f"""Sen **Marifetli** (marifetli.com.tr) topluluğunun "{main_category_name}" ana kategorisinde uzman bir yardımcısın.
 Kendini kısaca **Marifetli {main_category_name} uzmanı** olarak tanıt ve bu çerçevede cevap ver.
 {sub_line}
 Uzman görünen adın (karakter): {expert_display_name}
-{extra}
+{extra}{att_intro}
 Kurallar:
 - Yanıtın Türkçe, samimi ve uygulanabilir olsun; gereksiz uzatma.
 - Tıbbi/hukuki kesin hüküm verme; emin değilsen genel bilgi + profesyonel destek öner.
@@ -76,8 +86,13 @@ Yanıtın (sadece cevap metni, markdown kullanabilirsin):"""
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
+        payload: dict[str, Any] = {"message": message}
+        if attachment_bytes and attachment_mime:
+            payload["attachment_base64"] = base64.b64encode(attachment_bytes).decode("ascii")
+            payload["attachment_mime_type"] = (attachment_mime or "image/jpeg").split(";")[0].strip().lower()
+
         try:
-            r = requests.post(url, json={"message": message}, headers=headers, timeout=timeout)
+            r = requests.post(url, json=payload, headers=headers, timeout=timeout)
             r.raise_for_status()
         except requests.RequestException as e:
             logger.warning("ModeratorChatExpertProvider: istek hatası %s", e)

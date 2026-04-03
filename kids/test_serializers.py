@@ -35,6 +35,8 @@ class KidsTestQuestionWriteSerializer(serializers.Serializer):
     choices = serializers.ListField(child=serializers.DictField(), min_length=2, max_length=5)
     correct_choice_key = serializers.CharField(max_length=8, allow_blank=True)
     points = serializers.FloatField(min_value=0.1, required=False, default=1.0)
+    # Kaynak görsel sayfa sırası (testteki source_images.page_order ile eşleşir).
+    source_page_order = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=30)
 
     def validate_choices(self, value):
         cleaned = []
@@ -79,10 +81,35 @@ class KidsTestDistributeSerializer(serializers.Serializer):
 
 
 class KidsTestQuestionSerializer(serializers.ModelSerializer):
+    source_page_order = serializers.SerializerMethodField()
+    source_image_url = serializers.SerializerMethodField()
+
     class Meta:
         model = KidsTestQuestion
-        fields = ("id", "order", "stem", "topic", "subtopic", "choices", "correct_choice_key", "points")
+        fields = (
+            "id",
+            "order",
+            "stem",
+            "topic",
+            "subtopic",
+            "choices",
+            "correct_choice_key",
+            "points",
+            "source_page_order",
+            "source_image_url",
+            "source_meta",
+        )
         read_only_fields = fields
+
+    def get_source_page_order(self, obj):
+        return obj.source_image.page_order if obj.source_image_id else None
+
+    def get_source_image_url(self, obj):
+        request = self.context.get("request")
+        si = getattr(obj, "source_image", None)
+        if not si or not getattr(si, "image", None):
+            return None
+        return _absolute_media_url(request, si.image.url)
 
 
 class KidsTestSourceImageSerializer(serializers.ModelSerializer):

@@ -12,16 +12,20 @@ from core.i18n_catalog import translate
 from core.i18n_resolve import language_for_kids_recipient
 from notifications.services import deliver_fcm_push_tokens
 
+from .kg_slots import normalize_kg_slots
 from .models import (
     KidsAnnouncement,
     KidsAssignment,
     KidsChallenge,
     KidsChallengeInvite,
+    KidsClass,
     KidsConversation,
     KidsEnrollment,
     KidsFCMDeviceToken,
     KidsHomework,
     KidsHomeworkSubmission,
+    KidsKindergartenClassDayPlan,
+    KidsKindergartenDailyRecord,
     KidsMessage,
     KidsNotification,
     KidsSubmission,
@@ -48,6 +52,7 @@ def kids_notification_relative_path(
     challenge_invite: KidsChallengeInvite | None = None,
     conversation: KidsConversation | None = None,
     announcement: KidsAnnouncement | None = None,
+    kindergarten_daily_record: KidsKindergartenDailyRecord | None = None,
 ) -> str:
     """Next.js: `${pathPrefix}${action_path}` (örn. action_path=/ogrenci/proje/3)."""
     if notification_type == KidsNotification.NotificationType.NEW_ASSIGNMENT and assignment:
@@ -95,6 +100,12 @@ def kids_notification_relative_path(
         return _kids_app_path("ogretmen", "sinif", str(cid))
     if notification_type == KidsNotification.NotificationType.ASSIGNMENT_GRADED_WITH_RUBRIC and assignment:
         return _kids_app_path("ogrenci", "proje", str(assignment.pk))
+    if notification_type in (
+        KidsNotification.NotificationType.KG_CHILD_ARRIVED,
+        KidsNotification.NotificationType.KG_END_OF_DAY,
+        KidsNotification.NotificationType.KG_MONTHLY_ABSENCE,
+    ):
+        return _kids_app_path("veli", "cocuklarin-durumu")
     return _kids_app_path("bildirimler")
 
 
@@ -107,6 +118,7 @@ def kids_notification_absolute_url(
     challenge_invite: KidsChallengeInvite | None = None,
     conversation: KidsConversation | None = None,
     announcement: KidsAnnouncement | None = None,
+    kindergarten_daily_record: KidsKindergartenDailyRecord | None = None,
 ) -> str:
     """Push tıklama: sunucunun bildiği tam Kids kökü + isteğe bağlı URL öneki."""
     base = (getattr(settings, "KIDS_FRONTEND_URL", None) or "").strip().rstrip("/")
@@ -118,6 +130,7 @@ def kids_notification_absolute_url(
         challenge_invite=challenge_invite,
         conversation=conversation,
         announcement=announcement,
+        kindergarten_daily_record=kindergarten_daily_record,
     )
     prefix = (getattr(settings, "KIDS_FRONTEND_PATH_PREFIX", None) or "").strip().strip("/")
     if prefix:
@@ -162,6 +175,7 @@ def create_kids_notification(
     conversation: KidsConversation | None = None,
     message_record: KidsMessage | None = None,
     announcement: KidsAnnouncement | None = None,
+    kindergarten_daily_record: KidsKindergartenDailyRecord | None = None,
 ) -> KidsNotification | None:
     if recipient_student is None and recipient_user is None:
         return None
@@ -187,6 +201,7 @@ def create_kids_notification(
         conversation=conversation,
         message_record=message_record,
         announcement=announcement,
+        kindergarten_daily_record=kindergarten_daily_record,
     )
     tokens = _fcm_tokens_for_recipient(
         recipient_student=recipient_student,
@@ -196,6 +211,8 @@ def create_kids_notification(
         _fb = None
         if assignment and getattr(assignment, "kids_class", None):
             _fb = getattr(assignment.kids_class, "language", None)
+        elif kindergarten_daily_record and getattr(kindergarten_daily_record, "kids_class", None):
+            _fb = getattr(kindergarten_daily_record.kids_class, "language", None)
         _lang = language_for_kids_recipient(
             recipient_student=recipient_student,
             recipient_user=recipient_user,
@@ -207,8 +224,9 @@ def create_kids_notification(
             submission=submission,
             challenge=challenge,
             challenge_invite=challenge_invite,
-                conversation=conversation,
-                announcement=announcement,
+            conversation=conversation,
+            announcement=announcement,
+            kindergarten_daily_record=kindergarten_daily_record,
         )
         try:
             deliver_fcm_push_tokens(
@@ -412,14 +430,14 @@ def notify_teacher_homework_parent_approved(submission_id: int) -> None:
         ).get(pk=submission_id)
     except KidsHomeworkSubmission.DoesNotExist:
         return
-    if sub.status != KidsHomeworkSubmission.Status.PARENT_APPROVED:
+    if sub.status != KidsHomeworkSubmission.Status.TEACHER_APPROVED:
         return
     teacher_user = sub.homework.kids_class.teacher
     student_label = sub.student.full_name or sub.student.email
     _lang = language_for_kids_recipient(recipient_student=None, recipient_user=teacher_user)
     msg = translate(
         _lang,
-        "kids.notif.homework_parent_approved",
+        "kids.notif.homework_parent_finalized",
         student=student_label,
         title=sub.homework.title,
     )
@@ -465,3 +483,143 @@ def notify_student_homework_teacher_reviewed(submission_id: int) -> None:
         )
     except Exception:
         logger.exception("Kids homework student notify failed submission=%s", submission_id)
+
+
+def _kg_tri(lang: str, value: bool | None) -> str:
+    if value is True:
+        return translate(lang, "kids.kg.yes")
+    if value is False:
+        return translate(lang, "kids.kg.no")
+    return translate(lang, "kids.kg.unmarked")
+
+
+def _kg_format_slots_block(lang: str, slots) -> str | None:
+    """Birden fazla öğün/uyku satırı; boşsa None."""
+    norm = normalize_kg_slots(slots)
+    if not norm:
+        return None
+    lines = [f"• {s.get('label', '')}: {_kg_tri(lang, s.get('ok'))}" for s in norm]
+    return "\n".join(lines) if lines else None
+
+
+def notify_kindergarten_parent_arrival(record_id: int) -> None:
+    try:
+        rec = KidsKindergartenDailyRecord.objects.select_related(
+            "student", "kids_class", "kids_class__teacher"
+        ).get(pk=record_id)
+    except KidsKindergartenDailyRecord.DoesNotExist:
+        return
+    student = rec.student
+    parent = getattr(student, "parent_account", None)
+    if parent is None:
+        return
+    plan_row = (
+        KidsKindergartenClassDayPlan.objects.filter(
+            kids_class_id=rec.kids_class_id, plan_date=rec.record_date
+        )
+        .only("plan_text")
+        .first()
+    )
+    plan_text = (plan_row.plan_text or "").strip() if plan_row else ""
+    child_name = student.full_name or student.email
+    lang = language_for_kids_recipient(recipient_user=parent, recipient_student=None)
+    if plan_text:
+        msg = translate(lang, "kids.notif.kg_arrived_plan", name=child_name, plan=plan_text)
+    else:
+        msg = translate(lang, "kids.notif.kg_arrived", name=child_name)
+    teacher_user = rec.kids_class.teacher
+    try:
+        create_kids_notification(
+            recipient_user=parent,
+            sender_user=teacher_user,
+            notification_type=KidsNotification.NotificationType.KG_CHILD_ARRIVED,
+            message=msg,
+            kindergarten_daily_record=rec,
+        )
+    except Exception:
+        logger.exception("notify_kindergarten_parent_arrival failed record=%s", record_id)
+
+
+def notify_kindergarten_parent_end_of_day(record_id: int) -> None:
+    try:
+        rec = KidsKindergartenDailyRecord.objects.select_related(
+            "student", "kids_class", "kids_class__teacher"
+        ).get(pk=record_id)
+    except KidsKindergartenDailyRecord.DoesNotExist:
+        return
+    student = rec.student
+    parent = getattr(student, "parent_account", None)
+    if parent is None:
+        return
+    lang = language_for_kids_recipient(recipient_user=parent, recipient_student=None)
+    tn = (rec.teacher_day_note or "").strip()
+    note_extra = "\n\n" + tn if tn else ""
+    meal_detail = _kg_format_slots_block(lang, getattr(rec, "meal_slots", None))
+    nap_detail = _kg_format_slots_block(lang, getattr(rec, "nap_slots", None))
+    meal_str = meal_detail if meal_detail else _kg_tri(lang, rec.meal_ok)
+    nap_str = nap_detail if nap_detail else _kg_tri(lang, rec.nap_ok)
+    msg = translate(
+        lang,
+        "kids.notif.kg_end_of_day",
+        name=student.full_name or student.email,
+        date=str(rec.record_date),
+        present=_kg_tri(lang, rec.present),
+        meal=meal_str,
+        nap=nap_str,
+        note=note_extra,
+    )
+    teacher_user = rec.kids_class.teacher
+    try:
+        create_kids_notification(
+            recipient_user=parent,
+            sender_user=teacher_user,
+            notification_type=KidsNotification.NotificationType.KG_END_OF_DAY,
+            message=msg,
+            kindergarten_daily_record=rec,
+        )
+    except Exception:
+        logger.exception("notify_kindergarten_parent_end_of_day failed record=%s", record_id)
+
+
+def notify_kindergarten_parent_monthly_absence(
+    *,
+    student_id: int,
+    kids_class_id: int,
+    year: int,
+    month: int,
+    absence_count: int,
+) -> None:
+    try:
+        student = KidsUser.objects.get(pk=student_id, role=KidsUserRole.STUDENT)
+    except KidsUser.DoesNotExist:
+        return
+    kc = KidsClass.objects.filter(pk=kids_class_id).select_related("teacher").first()
+    if not kc:
+        return
+    parent = getattr(student, "parent_account", None)
+    if parent is None:
+        return
+    lang = language_for_kids_recipient(recipient_user=parent, recipient_student=None)
+    month_label = f"{year}-{int(month):02d}"
+    msg = translate(
+        lang,
+        "kids.notif.kg_monthly_absence",
+        name=student.full_name or student.email,
+        month_label=month_label,
+        count=absence_count,
+    )
+    teacher_user = kc.teacher
+    try:
+        create_kids_notification(
+            recipient_user=parent,
+            sender_user=teacher_user,
+            notification_type=KidsNotification.NotificationType.KG_MONTHLY_ABSENCE,
+            message=msg,
+            kindergarten_daily_record=None,
+        )
+    except Exception:
+        logger.exception(
+            "notify_kindergarten_parent_monthly_absence failed student=%s class=%s",
+            student_id,
+            kids_class_id,
+        )

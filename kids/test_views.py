@@ -3,9 +3,12 @@ from __future__ import annotations
 from datetime import timedelta
 import json
 
+import os
+
 from django.conf import settings
+from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count, Prefetch, Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -34,6 +37,7 @@ from .models import (
 )
 from .notifications_service import create_kids_notification
 from .test_serializers import (
+    _absolute_media_url,
     KidsStudentTestListSerializer,
     KidsStudentTestSubmitSerializer,
     KidsTestAttemptSerializer,
@@ -43,6 +47,35 @@ from .test_serializers import (
     KidsTestSerializer,
 )
 from .tests_ai import extract_test_from_images
+
+
+def _questions_prefetch_queryset():
+    return KidsTestQuestion.objects.select_related("source_image").order_by("order", "id")
+
+
+def _attach_question_source_image(
+    images_by_page: dict[int, KidsTestSourceImage],
+    source_page_order: int | None,
+) -> KidsTestSourceImage | None:
+    if not images_by_page:
+        return None
+    if source_page_order is not None:
+        return images_by_page.get(int(source_page_order))
+    if len(images_by_page) == 1:
+        return next(iter(images_by_page.values()))
+    return None
+
+
+def _clone_test_source_images(source: KidsTest, dest: KidsTest) -> dict[int, KidsTestSourceImage]:
+    out: dict[int, KidsTestSourceImage] = {}
+    for si in source.source_images.all().order_by("page_order"):
+        with si.image.open("rb") as f:
+            cf = ContentFile(f.read())
+            ni = KidsTestSourceImage(test=dest, page_order=si.page_order)
+            name = os.path.basename(si.image.name) or f"p{si.page_order}.jpg"
+            ni.image.save(name, cf, save=True)
+            out[si.page_order] = ni
+    return out
 
 
 class KidsAuthenticatedMixin:
@@ -170,7 +203,10 @@ class KidsClassTestListCreateView(KidsAuthenticatedMixin, APIView):
         tests = (
             KidsTest.objects.filter(kids_class_id=kids_class.id)
             .select_related("kids_class", "created_by")
-            .prefetch_related("questions", "source_images")
+            .prefetch_related(
+                Prefetch("questions", queryset=_questions_prefetch_queryset()),
+                "source_images",
+            )
             .order_by("-published_at", "-created_at")
         )
         return Response(KidsTestSerializer(tests, many=True, context={"request": request}).data)
@@ -209,7 +245,16 @@ class KidsClassTestListCreateView(KidsAuthenticatedMixin, APIView):
                 if (data.get("status") or KidsTest.Status.PUBLISHED) == KidsTest.Status.PUBLISHED
                 else None,
             )
+            images_by_page: dict[int, KidsTestSourceImage] = {}
+            for idx, image in enumerate(data.get("source_images") or [], start=1):
+                img_row = KidsTestSourceImage.objects.create(
+                    test=row,
+                    image=image,
+                    page_order=idx,
+                )
+                images_by_page[idx] = img_row
             for q in data["questions"]:
+                src = _attach_question_source_image(images_by_page, q.get("source_page_order"))
                 KidsTestQuestion.objects.create(
                     test=row,
                     order=q["order"],
@@ -219,16 +264,14 @@ class KidsClassTestListCreateView(KidsAuthenticatedMixin, APIView):
                     choices=q["choices"],
                     correct_choice_key=q["correct_choice_key"],
                     points=q.get("points") or 1.0,
-                )
-            for idx, image in enumerate(data.get("source_images") or [], start=1):
-                KidsTestSourceImage.objects.create(
-                    test=row,
-                    image=image,
-                    page_order=idx,
+                    source_image=src,
                 )
         row = (
             KidsTest.objects.select_related("kids_class", "created_by")
-            .prefetch_related("questions", "source_images")
+            .prefetch_related(
+                Prefetch("questions", queryset=_questions_prefetch_queryset()),
+                "source_images",
+            )
             .get(pk=row.pk)
         )
         if row.status == KidsTest.Status.PUBLISHED:
@@ -245,7 +288,10 @@ class KidsMyCreatedTestListView(KidsAuthenticatedMixin, APIView):
         tests = (
             KidsTest.objects.filter(created_by=request.user)
             .select_related("kids_class", "created_by")
-            .prefetch_related("questions", "source_images")
+            .prefetch_related(
+                Prefetch("questions", queryset=_questions_prefetch_queryset()),
+                "source_images",
+            )
             .order_by("-published_at", "-created_at")
         )
         return Response(KidsTestSerializer(tests, many=True, context={"request": request}).data)
@@ -259,7 +305,10 @@ class KidsTestDistributeView(KidsAuthenticatedMixin, APIView):
             return Response(status=status.HTTP_403_FORBIDDEN)
         source = (
             KidsTest.objects.filter(pk=test_id)
-            .prefetch_related("questions")
+            .prefetch_related(
+                Prefetch("questions", queryset=_questions_prefetch_queryset()),
+                "source_images",
+            )
             .first()
         )
         if not source:
@@ -298,7 +347,11 @@ class KidsTestDistributeView(KidsAuthenticatedMixin, APIView):
                     status=KidsTest.Status.PUBLISHED,
                     published_at=timezone.now(),
                 )
+                new_by_page = _clone_test_source_images(source, cloned)
                 for q in source.questions.all().order_by("order", "id"):
+                    src = None
+                    if q.source_image_id:
+                        src = new_by_page.get(q.source_image.page_order)
                     KidsTestQuestion.objects.create(
                         test=cloned,
                         order=q.order,
@@ -308,12 +361,17 @@ class KidsTestDistributeView(KidsAuthenticatedMixin, APIView):
                         choices=q.choices,
                         correct_choice_key=q.correct_choice_key,
                         points=q.points,
+                        source_image=src,
+                        source_meta=q.source_meta or {},
                     )
                 created_ids.append(cloned.id)
         rows = (
             KidsTest.objects.filter(id__in=created_ids)
             .select_related("kids_class", "created_by")
-            .prefetch_related("questions", "source_images")
+            .prefetch_related(
+                Prefetch("questions", queryset=_questions_prefetch_queryset()),
+                "source_images",
+            )
             .order_by("-created_at")
         )
         if created_ids:
@@ -337,7 +395,10 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, test_id):
-        qs = KidsTest.objects.select_related("kids_class", "created_by").prefetch_related("questions", "source_images")
+        qs = KidsTest.objects.select_related("kids_class", "created_by").prefetch_related(
+            Prefetch("questions", queryset=_questions_prefetch_queryset()),
+            "source_images",
+        )
         row = qs.filter(pk=test_id).first()
         if not row:
             return Response(status=status.HTTP_404_NOT_FOUND)
@@ -346,7 +407,12 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                 return Response(status=status.HTTP_404_NOT_FOUND)
             attempt = KidsTestAttempt.objects.filter(test=row, student=request.user).first()
             questions = []
-            for q in row.questions.all().order_by("order", "id"):
+            for q in row.questions.all():
+                src_url = None
+                src_po = None
+                if q.source_image_id and q.source_image and getattr(q.source_image, "image", None):
+                    src_url = _absolute_media_url(request, q.source_image.image.url)
+                    src_po = q.source_image.page_order
                 questions.append(
                     {
                         "id": q.id,
@@ -356,6 +422,8 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                         "subtopic": q.subtopic,
                         "choices": q.choices,
                         "points": q.points,
+                        "source_image_url": src_url,
+                        "source_page_order": src_po,
                     }
                 )
             return Response(
@@ -407,7 +475,11 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                 )
                 ser.is_valid(raise_exception=True)
                 row.questions.all().delete()
+                images_by_page = {
+                    img.page_order: img for img in row.source_images.all().order_by("page_order")
+                }
                 for q in ser.validated_data["questions"]:
+                    src = _attach_question_source_image(images_by_page, q.get("source_page_order"))
                     KidsTestQuestion.objects.create(
                         test=row,
                         order=q["order"],
@@ -417,10 +489,14 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                         choices=q["choices"],
                         correct_choice_key=q["correct_choice_key"],
                         points=q.get("points") or 1.0,
+                        source_image=src,
                     )
         row = (
             KidsTest.objects.select_related("kids_class", "created_by")
-            .prefetch_related("questions", "source_images")
+            .prefetch_related(
+                Prefetch("questions", queryset=_questions_prefetch_queryset()),
+                "source_images",
+            )
             .get(pk=row.pk)
         )
         return Response(KidsTestSerializer(row, context={"request": request}).data)

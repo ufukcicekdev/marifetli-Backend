@@ -3232,26 +3232,34 @@ class KidsParentHomeworkSubmissionReviewView(KidsAuthenticatedMixin, APIView):
         ser.is_valid(raise_exception=True)
         approved = bool(ser.validated_data["approved"])
         note = (ser.validated_data.get("note") or "").strip()
-        sub.status = (
-            KidsHomeworkSubmission.Status.PARENT_APPROVED
-            if approved
-            else KidsHomeworkSubmission.Status.PARENT_REJECTED
-        )
         sub.parent_note = note
         sub.parent_reviewed_at = timezone.now()
         sub.parent_reviewed_by = request.user
-        sub.save(
-            update_fields=[
-                "status",
-                "parent_note",
-                "parent_reviewed_at",
-                "parent_reviewed_by",
-                "updated_at",
-            ]
-        )
-        if sub.status == KidsHomeworkSubmission.Status.PARENT_APPROVED:
-            sid = sub.pk
-            transaction.on_commit(lambda s=sid: notify_teacher_homework_parent_approved(s))
+        if approved:
+            # Veli onayı = süreç biter; ayrı öğretmen onayı adımı yok.
+            sub.status = KidsHomeworkSubmission.Status.TEACHER_APPROVED
+            sub.teacher_note = ""
+            sub.teacher_reviewed_at = timezone.now()
+            sub.teacher_reviewed_by = None
+        else:
+            sub.status = KidsHomeworkSubmission.Status.PARENT_REJECTED
+        update_fields = [
+            "status",
+            "parent_note",
+            "parent_reviewed_at",
+            "parent_reviewed_by",
+            "updated_at",
+        ]
+        if approved:
+            update_fields.extend(["teacher_note", "teacher_reviewed_at", "teacher_reviewed_by"])
+        sub.save(update_fields=update_fields)
+        if approved:
+
+            def _after_parent_finalized():
+                notify_teacher_homework_parent_approved(sub.pk)
+                notify_student_homework_teacher_reviewed(sub.pk)
+
+            transaction.on_commit(_after_parent_finalized)
         return Response(KidsHomeworkSubmissionSerializer(sub, context={"request": request}).data)
 
 
@@ -3275,6 +3283,22 @@ class KidsParentHomeworkSubmissionAttachmentDetailView(KidsAuthenticatedMixin, A
         ).first()
         if not att:
             return Response(status=status.HTTP_404_NOT_FOUND)
+        remaining = (
+            KidsHomeworkSubmissionAttachment.objects.filter(submission_id=sub.pk)
+            .exclude(pk=attachment_id)
+            .count()
+        )
+        if remaining == 0 and sub.status in (
+            KidsHomeworkSubmission.Status.STUDENT_DONE,
+            KidsHomeworkSubmission.Status.PARENT_APPROVED,
+            KidsHomeworkSubmission.Status.TEACHER_APPROVED,
+        ):
+            return Response(
+                {
+                    "detail": "Bu aşamada öğretmenin görebilmesi için en az bir öğrenci görseli kalmalıdır; son dosyayı silemezsiniz.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         att.file.delete(save=False)
         att.delete()
         sub = (

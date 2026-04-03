@@ -17,6 +17,8 @@ from .models import (
     KidsChallengeMember,
     KidsClass,
     KidsClassTeacher,
+    KidsKindergartenClassDayPlan,
+    KidsKindergartenDailyRecord,
     KidsConversation,
     KidsEnrollment,
     KidsFreestylePost,
@@ -431,6 +433,7 @@ class KidsClassSerializer(serializers.ModelSerializer):
             "description",
             "academic_year_label",
             "language",
+            "class_kind",
             "school",
             "school_id",
             "teacher",
@@ -568,6 +571,116 @@ class KidsClassTeacherWriteSerializer(serializers.Serializer):
     teacher_user_id = serializers.IntegerField(min_value=1)
     subject = serializers.CharField(max_length=80, required=False, allow_blank=True)
     is_active = serializers.BooleanField(required=False, default=True)
+
+
+class KidsKindergartenDayPlanSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = KidsKindergartenClassDayPlan
+        fields = ("plan_date", "plan_text", "updated_at")
+        read_only_fields = ("plan_date", "updated_at")
+
+
+class KidsKindergartenDailyRecordSerializer(serializers.ModelSerializer):
+    """Öğretmen / veli API: günlük kart."""
+
+    class Meta:
+        model = KidsKindergartenDailyRecord
+        fields = (
+            "id",
+            "kids_class_id",
+            "student_id",
+            "record_date",
+            "present",
+            "present_marked_at",
+            "meal_ok",
+            "meal_marked_at",
+            "meal_slots",
+            "nap_ok",
+            "nap_marked_at",
+            "nap_slots",
+            "teacher_day_note",
+            "digest_sent_at",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = (
+            "id",
+            "kids_class_id",
+            "student_id",
+            "record_date",
+            "present_marked_at",
+            "meal_marked_at",
+            "meal_slots",
+            "nap_marked_at",
+            "nap_slots",
+            "digest_sent_at",
+            "created_at",
+            "updated_at",
+        )
+
+
+class KidsKindergartenDailyRecordWriteSerializer(serializers.Serializer):
+    present = serializers.BooleanField(required=False, allow_null=True)
+    meal_ok = serializers.BooleanField(required=False, allow_null=True)
+    nap_ok = serializers.BooleanField(required=False, allow_null=True)
+    meal_slots = serializers.ListField(required=False, child=serializers.DictField(), allow_empty=True)
+    nap_slots = serializers.ListField(required=False, child=serializers.DictField(), allow_empty=True)
+    teacher_day_note = serializers.CharField(max_length=2000, required=False, allow_blank=True)
+
+    def validate_meal_slots(self, value):
+        from kids.kg_slots import MAX_KG_SLOTS, normalize_kg_slots
+
+        if value is not None and len(value) > MAX_KG_SLOTS:
+            raise serializers.ValidationError(f"En fazla {MAX_KG_SLOTS} öğün dilimi.")
+        return normalize_kg_slots(value)
+
+    def validate_nap_slots(self, value):
+        from kids.kg_slots import MAX_KG_SLOTS, normalize_kg_slots
+
+        if value is not None and len(value) > MAX_KG_SLOTS:
+            raise serializers.ValidationError(f"En fazla {MAX_KG_SLOTS} uyku dilimi.")
+        return normalize_kg_slots(value)
+
+
+class KidsKindergartenBulkSerializer(serializers.Serializer):
+    """Toplu günlük işlemleri: hedef + tek aksiyon (öğün dilimi, geldi, not, gün sonu)."""
+
+    date = serializers.DateField(required=False, allow_null=True)
+    action = serializers.ChoiceField(
+        choices=(
+            "mark_present",
+            "meal_slot",
+            "nap_slot",
+            "set_note",
+            "send_digest",
+        )
+    )
+    target = serializers.ChoiceField(
+        choices=("all_enrolled", "present_only"),
+        default="all_enrolled",
+    )
+    student_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        required=False,
+        allow_empty=False,
+        max_length=200,
+    )
+    present = serializers.BooleanField(required=False, allow_null=True)
+    slot_label = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    ok = serializers.BooleanField(required=False, allow_null=True, default=True)
+    note = serializers.CharField(max_length=2000, required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        action = attrs["action"]
+        if action == "mark_present":
+            if "present" not in attrs:
+                raise serializers.ValidationError({"present": "Geldi alanı bu işlem için zorunlu."})
+        if action in ("meal_slot", "nap_slot"):
+            if not (attrs.get("slot_label") or "").strip():
+                raise serializers.ValidationError({"slot_label": "Öğün / uyku etiketi gerekli."})
+        if action == "set_note" and "note" not in attrs:
+            attrs["note"] = ""
+        return attrs
 
 
 class KidsSubjectSerializer(serializers.ModelSerializer):
@@ -1264,6 +1377,7 @@ class KidsNotificationSerializer(serializers.ModelSerializer):
             challenge_invite=obj.challenge_invite,
             conversation=obj.conversation,
             announcement=obj.announcement,
+            kindergarten_daily_record=obj.kindergarten_daily_record,
         )
 
 

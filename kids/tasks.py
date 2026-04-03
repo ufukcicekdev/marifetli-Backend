@@ -2,7 +2,9 @@
 Kids Celery görevleri (planlanmış proje penceresi bildirimi).
 """
 
+import datetime as dt
 import logging
+from calendar import monthrange
 from datetime import timedelta
 
 from celery import shared_task
@@ -85,3 +87,76 @@ def notify_kids_assignments_due_soon(hours_before: int = 24):
             assignment.save(update_fields=["due_soon_notified_at", "updated_at"])
         except Exception:
             logger.exception("notify_kids_assignments_due_soon failed assignment_id=%s", assignment.id)
+
+
+@shared_task
+def kindergarten_monthly_absence_digest():
+    """
+    Bir önceki ayda `present=False` ile işaretlenen anaokulu / anasınıfı günleri için veli bildirimi.
+    Her ayın 1'inde Beat ile tetiklenir; (öğrenci, sınıf, yıl, ay) başına bir kez loglanır.
+    """
+    from kids.models import (
+        KidsClass,
+        KidsClassKind,
+        KidsEnrollment,
+        KidsKindergartenDailyRecord,
+        KidsKindergartenMonthlyReportLog,
+    )
+    from kids.notifications_service import notify_kindergarten_parent_monthly_absence
+
+    today = timezone.localdate()
+    if today.month == 1:
+        y, m = today.year - 1, 12
+    else:
+        y, m = today.year, today.month - 1
+    first = dt.date(y, m, 1)
+    last = dt.date(y, m, monthrange(y, m)[1])
+
+    for kc in KidsClass.objects.filter(
+        class_kind__in=(KidsClassKind.KINDERGARTEN, KidsClassKind.ANASINIFI),
+    ).only("id"):
+        for student_id in (
+            KidsEnrollment.objects.filter(kids_class=kc)
+            .values_list("student_id", flat=True)
+            .distinct()
+        ):
+            if KidsKindergartenMonthlyReportLog.objects.filter(
+                student_id=student_id, kids_class=kc, year=y, month=m
+            ).exists():
+                continue
+            cnt = KidsKindergartenDailyRecord.objects.filter(
+                kids_class=kc,
+                student_id=student_id,
+                record_date__gte=first,
+                record_date__lte=last,
+                present=False,
+            ).count()
+            if cnt > 0:
+                try:
+                    notify_kindergarten_parent_monthly_absence(
+                        student_id=student_id,
+                        kids_class_id=kc.pk,
+                        year=y,
+                        month=m,
+                        absence_count=cnt,
+                    )
+                except Exception:
+                    logger.exception(
+                        "kindergarten_monthly_absence_digest notify failed sid=%s cid=%s",
+                        student_id,
+                        kc.pk,
+                    )
+            try:
+                KidsKindergartenMonthlyReportLog.objects.create(
+                    student_id=student_id,
+                    kids_class=kc,
+                    year=y,
+                    month=m,
+                    absence_count=cnt,
+                )
+            except Exception:
+                logger.exception(
+                    "kindergarten_monthly_absence_digest log failed sid=%s cid=%s",
+                    student_id,
+                    kc.pk,
+                )

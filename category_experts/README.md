@@ -51,7 +51,7 @@ Admin: **Kategori uzmanları** — yeni ana kategori ekledikten sonra uzman kayd
 | Method | Path | Açıklama |
 |--------|------|----------|
 | GET | `/api/category-experts/` | Herkese açık: `enabled`, `backend_ready`, kategoriler, girişliyse `remaining_questions` |
-| POST | `/api/category-experts/ask/` | JWT + doğrulanmış e-posta: `{ main_category_id, subcategory_id?, question }` |
+| POST | `/api/category-experts/ask/` | JWT + doğrulanmış e-posta: JSON `{ main_category_id, subcategory_id?, question }` veya `multipart/form-data` ile aynı alanlar + isteğe bağlı `attachment` (JPEG/PNG/WebP/GIF, max 5MB). Görsel varsa soru metni 1+ karakter yeterli. |
 | GET | `/api/category-experts/my-history/` | Son 50 soru–cevap |
 
 ## Kendi modelinizi bağlamak
@@ -59,7 +59,7 @@ Admin: **Kategori uzmanları** — yeni ana kategori ekledikten sonra uzman kayd
 1. `category_experts/providers/` altında veya projenizde bir sınıf yazın:
    - `name: str`
    - `is_configured(self) -> bool`
-   - `generate_answer(self, *, question, main_category_name, subcategory_name, expert_display_name, extra_instructions) -> str`
+   - `generate_answer(self, *, question, main_category_name, subcategory_name, expert_display_name, extra_instructions, attachment_bytes=None, attachment_mime=None) -> str`
 
 2. `.env`: `CATEGORY_EXPERT_LLM_PROVIDER=mypackage.mymodule.MyExpertProvider`
 

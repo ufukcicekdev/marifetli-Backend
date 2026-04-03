@@ -1,7 +1,9 @@
 import logging
+import mimetypes
 
 from django.conf import settings
 from rest_framework import status
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -11,7 +13,7 @@ from core.permissions import IsVerified
 
 from .models import CategoryExpert, CategoryExpertQuery
 from .providers import get_expert_llm_provider
-from .serializers import CategoryExpertAskSerializer
+from .serializers import ALLOWED_EXPERT_ATTACHMENT_TYPES, CategoryExpertAskSerializer
 from .services import (
     category_expert_feature_enabled,
     expert_backend_ready,
@@ -70,8 +72,59 @@ class CategoryExpertConfigView(APIView):
         return resp
 
 
+def _coerce_ask_payload(request):
+    """Multipart'ta boş subcategory_id ('') → None; QueryDict kopyası üzerinde düzelt."""
+    data = request.data
+    if hasattr(data, "copy") and hasattr(data, "_mutable"):
+        p = data.copy()
+        p._mutable = True
+        if p.get("subcategory_id") == "":
+            p["subcategory_id"] = None
+        return p
+    if isinstance(data, dict):
+        out = {**data}
+        if out.get("subcategory_id") in ("", None):
+            out["subcategory_id"] = None
+        return out
+    return data
+
+
+def _sniff_image_mime(raw: bytes) -> str | None:
+    if not raw or len(raw) < 6:
+        return None
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if len(raw) >= 12 and raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
+        return "image/webp"
+    if raw.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    return None
+
+
+def _attachment_payload(uploaded) -> tuple[bytes | None, str | None]:
+    if not uploaded:
+        return None, None
+    raw = uploaded.read()
+    mime = (getattr(uploaded, "content_type", None) or "").split(";")[0].strip().lower()
+    sniffed = _sniff_image_mime(raw)
+    if sniffed and sniffed in ALLOWED_EXPERT_ATTACHMENT_TYPES:
+        mime = sniffed
+    elif mime not in ALLOWED_EXPERT_ATTACHMENT_TYPES or mime == "application/octet-stream":
+        guess, _ = mimetypes.guess_type(getattr(uploaded, "name", "") or "")
+        if guess and guess.lower() in ALLOWED_EXPERT_ATTACHMENT_TYPES:
+            mime = guess.lower()
+        elif sniffed:
+            mime = sniffed
+        else:
+            mime = "image/jpeg"
+    return raw, mime
+
+
 class CategoryExpertAskView(APIView):
     permission_classes = [IsAuthenticated, IsVerified]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def post(self, request):
         if not category_expert_feature_enabled():
@@ -87,11 +140,13 @@ class CategoryExpertAskView(APIView):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        ser = CategoryExpertAskSerializer(data=request.data)
+        ser = CategoryExpertAskSerializer(data=_coerce_ask_payload(request))
         ser.is_valid(raise_exception=True)
         main_id = ser.validated_data["main_category_id"]
         sub_id = ser.validated_data.get("subcategory_id")
         question = ser.validated_data["question"]
+        att_file = ser.validated_data.get("attachment")
+        attachment_bytes, attachment_mime = _attachment_payload(att_file)
 
         remaining, cap = user_remaining_questions(request.user)
         if cap > 0 and remaining <= 0:
@@ -133,6 +188,8 @@ class CategoryExpertAskView(APIView):
                 subcategory_name=sub_name,
                 expert_display_name=expert.display_name,
                 extra_instructions=expert.extra_instructions or "",
+                attachment_bytes=attachment_bytes,
+                attachment_mime=attachment_mime,
             )
         except Exception:
             logger.exception("CategoryExpert ask: provider hatası")
@@ -155,7 +212,10 @@ class CategoryExpertAskView(APIView):
             answer_text=answer,
             provider=provider.name,
             model_name=model_name,
-            metadata={"limit_period": get_effective_category_expert_limit_period()},
+            metadata={
+                "limit_period": get_effective_category_expert_limit_period(),
+                "had_attachment": bool(attachment_bytes),
+            },
         )
 
         new_remaining, _ = user_remaining_questions(request.user)
