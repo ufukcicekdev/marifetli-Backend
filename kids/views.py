@@ -72,6 +72,7 @@ from .models import (
     KidsSubmission,
     KidsSubject,
     KidsTeacherBranch,
+    KidsTestAttempt,
     KidsUser,
     KidsUserBadge,
     KidsUserRole,
@@ -536,6 +537,40 @@ def _parent_child_overview_dict(student: KidsUser, request=None) -> dict:
             }
         )
 
+    test_attempts_history: list[dict] = []
+    for att in (
+        KidsTestAttempt.objects.filter(student=student, submitted_at__isnull=False)
+        .select_related("test", "test__kids_class")
+        .order_by("-submitted_at", "-id")[:50]
+    ):
+        kt = att.test
+        total_q = int(att.total_questions or 0)
+        correct = int(att.total_correct or 0)
+        wrong = max(0, total_q - correct)
+        # Her soru 100/total_q puan; toplam = (doğru/total_q)*100 — DB'deki score ile aynı formül, bayat kayıt olmasın.
+        score_100 = (float(correct) / float(total_q) * 100.0) if total_q > 0 else 0.0
+        test_attempts_history.append(
+            {
+                "attempt_id": att.id,
+                "test_id": kt.id,
+                "title": (kt.title or "").strip() or "Test",
+                "class_name": kt.kids_class.name if kt.kids_class_id else "",
+                "submitted_at": att.submitted_at.isoformat() if att.submitted_at else None,
+                "score": round(score_100, 2),
+                "total_questions": total_q,
+                "total_correct": correct,
+                "total_wrong": wrong,
+                "auto_submitted": bool(att.auto_submitted),
+            }
+        )
+
+    # Veli özeti uzun süredir aynı ORM örneği üzerinden üretiliyorsa growth_points bayat kalabilir;
+    # öğrenci paneli /kids/me ile aynı kaynak (DB) değerini göstermek için tazele.
+    try:
+        student.refresh_from_db(fields=["growth_points"])
+    except Exception:
+        pass
+
     return {
         "id": student.id,
         "first_name": student.first_name,
@@ -549,6 +584,7 @@ def _parent_child_overview_dict(student: KidsUser, request=None) -> dict:
         "challenges": challenges_data,
         "homework_history": homework_history,
         "pending_parent_actions": pending_parent_actions,
+        "test_attempts_history": test_attempts_history,
     }
 
 
