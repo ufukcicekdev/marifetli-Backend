@@ -32,6 +32,7 @@ from .models import (
     KidsTestAnswer,
     KidsTestAttempt,
     KidsTestQuestion,
+    KidsTestReadingPassage,
     KidsTestSourceImage,
     KidsTeacherBranch,
     KidsUser,
@@ -51,7 +52,7 @@ from .tests_ai import extract_test_from_images
 
 
 def _questions_prefetch_queryset():
-    return KidsTestQuestion.objects.select_related("source_image").order_by("order", "id")
+    return KidsTestQuestion.objects.select_related("source_image", "reading_passage").order_by("order", "id")
 
 
 def _stem_for_student_view(stem: str) -> str:
@@ -66,6 +67,19 @@ def _stem_for_student_view(stem: str) -> str:
             return s
         s = ns
     return s
+
+
+def _create_reading_passages_for_test(test: KidsTest, passages_data: list) -> dict[int, KidsTestReadingPassage]:
+    out: dict[int, KidsTestReadingPassage] = {}
+    for p in sorted(passages_data or [], key=lambda x: x["order"]):
+        inst = KidsTestReadingPassage.objects.create(
+            test=test,
+            order=int(p["order"]),
+            title=(p.get("title") or "").strip()[:300],
+            body=(p.get("body") or "").strip()[:50000],
+        )
+        out[int(p["order"])] = inst
+    return out
 
 
 def _attach_question_source_image(
@@ -221,6 +235,7 @@ class KidsClassTestListCreateView(KidsAuthenticatedMixin, APIView):
             .prefetch_related(
                 Prefetch("questions", queryset=_questions_prefetch_queryset()),
                 "source_images",
+                "reading_passages",
             )
             .order_by("-published_at", "-created_at")
         )
@@ -237,11 +252,21 @@ class KidsClassTestListCreateView(KidsAuthenticatedMixin, APIView):
                 parsed_questions = json.loads(raw_questions)
             except json.JSONDecodeError:
                 return Response({"detail": "Sorular JSON formatında olmalı."}, status=status.HTTP_400_BAD_REQUEST)
+        raw_passages = request.data.get("passages")
+        parsed_passages = raw_passages
+        if isinstance(raw_passages, str):
+            try:
+                parsed_passages = json.loads(raw_passages or "[]")
+            except json.JSONDecodeError:
+                return Response({"detail": "Okuma metinleri JSON formatında olmalı."}, status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(parsed_passages, list):
+            parsed_passages = []
         payload = {
             "title": request.data.get("title"),
             "instructions": request.data.get("instructions", ""),
             "duration_minutes": request.data.get("duration_minutes"),
             "status": request.data.get("status", KidsTest.Status.PUBLISHED),
+            "passages": parsed_passages,
             "questions": parsed_questions,
             "source_images": request.FILES.getlist("source_images") if hasattr(request, "FILES") else [],
         }
@@ -268,8 +293,11 @@ class KidsClassTestListCreateView(KidsAuthenticatedMixin, APIView):
                     page_order=idx,
                 )
                 images_by_page[idx] = img_row
+            passage_by_order = _create_reading_passages_for_test(row, data.get("passages") or [])
             for q in data["questions"]:
                 src = _attach_question_source_image(images_by_page, q.get("source_page_order"))
+                rpo = q.get("reading_passage_order")
+                rp = passage_by_order.get(int(rpo)) if rpo is not None else None
                 KidsTestQuestion.objects.create(
                     test=row,
                     order=q["order"],
@@ -280,12 +308,14 @@ class KidsClassTestListCreateView(KidsAuthenticatedMixin, APIView):
                     correct_choice_key=q["correct_choice_key"],
                     points=q.get("points") or 1.0,
                     source_image=src,
+                    reading_passage=rp,
                 )
         row = (
             KidsTest.objects.select_related("kids_class", "created_by")
             .prefetch_related(
                 Prefetch("questions", queryset=_questions_prefetch_queryset()),
                 "source_images",
+                "reading_passages",
             )
             .get(pk=row.pk)
         )
@@ -306,6 +336,7 @@ class KidsMyCreatedTestListView(KidsAuthenticatedMixin, APIView):
             .prefetch_related(
                 Prefetch("questions", queryset=_questions_prefetch_queryset()),
                 "source_images",
+                "reading_passages",
             )
             .order_by("-published_at", "-created_at")
         )
@@ -323,6 +354,7 @@ class KidsTestDistributeView(KidsAuthenticatedMixin, APIView):
             .prefetch_related(
                 Prefetch("questions", queryset=_questions_prefetch_queryset()),
                 "source_images",
+                "reading_passages",
             )
             .first()
         )
@@ -363,10 +395,20 @@ class KidsTestDistributeView(KidsAuthenticatedMixin, APIView):
                     published_at=timezone.now(),
                 )
                 new_by_page = _clone_test_source_images(source, cloned)
+                old_passage_to_new: dict[int, KidsTestReadingPassage] = {}
+                for p in source.reading_passages.all().order_by("order", "id"):
+                    np = KidsTestReadingPassage.objects.create(
+                        test=cloned,
+                        order=p.order,
+                        title=p.title,
+                        body=p.body,
+                    )
+                    old_passage_to_new[p.id] = np
                 for q in source.questions.all().order_by("order", "id"):
                     src = None
                     if q.source_image_id:
                         src = new_by_page.get(q.source_image.page_order)
+                    new_rp = old_passage_to_new.get(q.reading_passage_id) if q.reading_passage_id else None
                     KidsTestQuestion.objects.create(
                         test=cloned,
                         order=q.order,
@@ -378,6 +420,7 @@ class KidsTestDistributeView(KidsAuthenticatedMixin, APIView):
                         points=q.points,
                         source_image=src,
                         source_meta=q.source_meta or {},
+                        reading_passage=new_rp,
                     )
                 created_ids.append(cloned.id)
         rows = (
@@ -386,6 +429,7 @@ class KidsTestDistributeView(KidsAuthenticatedMixin, APIView):
             .prefetch_related(
                 Prefetch("questions", queryset=_questions_prefetch_queryset()),
                 "source_images",
+                "reading_passages",
             )
             .order_by("-created_at")
         )
@@ -413,6 +457,7 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
         qs = KidsTest.objects.select_related("kids_class", "created_by").prefetch_related(
             Prefetch("questions", queryset=_questions_prefetch_queryset()),
             "source_images",
+            "reading_passages",
         )
         row = qs.filter(pk=test_id).first()
         if not row:
@@ -429,6 +474,10 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
             if attempt and attempt.submitted_at:
                 for a in attempt.answers.all():
                     answers_by_q[a.question_id] = a
+            passages_out = [
+                {"id": p.id, "order": p.order, "title": p.title, "body": p.body}
+                for p in row.reading_passages.all().order_by("order", "id")
+            ]
             questions = []
             for q in row.questions.all():
                 src_url = None
@@ -442,6 +491,7 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                     "stem": _stem_for_student_view(q.stem),
                     "choices": q.choices,
                     "points": q.points,
+                    "reading_passage_order": q.reading_passage.order if q.reading_passage_id else None,
                     "source_image_url": src_url,
                     "source_page_order": src_po,
                 }
@@ -459,6 +509,7 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                     "instructions": row.instructions,
                     "duration_minutes": row.duration_minutes,
                     "published_at": row.published_at,
+                    "passages": passages_out,
                     "questions": questions,
                     "attempt": KidsTestAttemptSerializer(attempt).data if attempt else None,
                 }
@@ -490,22 +541,36 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                         row.published_at = timezone.now()
             row.save()
             if "questions" in payload and isinstance(payload.get("questions"), list):
+                if "passages" in payload:
+                    plist = payload.get("passages")
+                    if not isinstance(plist, list):
+                        plist = []
+                else:
+                    plist = [
+                        {"order": p.order, "title": p.title, "body": p.body}
+                        for p in row.reading_passages.all().order_by("order", "id")
+                    ]
                 ser = KidsTestCreateSerializer(
                     data={
                         "title": row.title,
                         "instructions": row.instructions,
                         "duration_minutes": row.duration_minutes,
                         "status": row.status,
+                        "passages": plist,
                         "questions": payload.get("questions"),
                     }
                 )
                 ser.is_valid(raise_exception=True)
                 row.questions.all().delete()
+                row.reading_passages.all().delete()
+                passage_by_order = _create_reading_passages_for_test(row, ser.validated_data.get("passages") or [])
                 images_by_page = {
                     img.page_order: img for img in row.source_images.all().order_by("page_order")
                 }
                 for q in ser.validated_data["questions"]:
                     src = _attach_question_source_image(images_by_page, q.get("source_page_order"))
+                    rpo = q.get("reading_passage_order")
+                    rp = passage_by_order.get(int(rpo)) if rpo is not None else None
                     KidsTestQuestion.objects.create(
                         test=row,
                         order=q["order"],
@@ -516,12 +581,14 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                         correct_choice_key=q["correct_choice_key"],
                         points=q.get("points") or 1.0,
                         source_image=src,
+                        reading_passage=rp,
                     )
         row = (
             KidsTest.objects.select_related("kids_class", "created_by")
             .prefetch_related(
                 Prefetch("questions", queryset=_questions_prefetch_queryset()),
                 "source_images",
+                "reading_passages",
             )
             .get(pk=row.pk)
         )

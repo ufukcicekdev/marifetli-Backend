@@ -5,6 +5,7 @@ from .models import (
     KidsTestAnswer,
     KidsTestAttempt,
     KidsTestQuestion,
+    KidsTestReadingPassage,
     KidsTestSourceImage,
 )
 from .serializers import _absolute_media_url
@@ -37,6 +38,8 @@ class KidsTestQuestionWriteSerializer(serializers.Serializer):
     points = serializers.FloatField(min_value=0.1, required=False, default=1.0)
     # Kaynak görsel sayfa sırası (testteki source_images.page_order ile eşleşir).
     source_page_order = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=30)
+    # Okuma metni sırası (testteki reading_passages.order ile eşleşir).
+    reading_passage_order = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=50)
 
     def validate_choices(self, value):
         cleaned = []
@@ -63,13 +66,44 @@ class KidsTestQuestionWriteSerializer(serializers.Serializer):
         return attrs
 
 
+class KidsTestPassageWriteSerializer(serializers.Serializer):
+    order = serializers.IntegerField(min_value=1, max_value=50)
+    title = serializers.CharField(max_length=300, required=False, allow_blank=True)
+    body = serializers.CharField(required=False, allow_blank=True, max_length=50000)
+
+    def validate(self, attrs):
+        attrs["title"] = str(attrs.get("title") or "").strip()[:300]
+        attrs["body"] = str(attrs.get("body") or "").strip()[:50000]
+        return attrs
+
+
 class KidsTestCreateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=240)
     instructions = serializers.CharField(required=False, allow_blank=True, max_length=3000)
     duration_minutes = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=300)
     status = serializers.ChoiceField(choices=KidsTest.Status.choices, required=False, default=KidsTest.Status.PUBLISHED)
+    passages = KidsTestPassageWriteSerializer(many=True, required=False)
     questions = KidsTestQuestionWriteSerializer(many=True, allow_empty=False)
     source_images = serializers.ListField(child=serializers.ImageField(), required=False, allow_empty=True, max_length=10)
+
+    def validate(self, attrs):
+        passages = attrs.get("passages")
+        if not passages:
+            attrs["passages"] = []
+            passages = []
+        orders = [p["order"] for p in passages]
+        if len(orders) != len(set(orders)):
+            raise serializers.ValidationError({"passages": "Okuma metni sıra numaraları tekrar edemez."})
+        passage_order_set = set(orders)
+        for q in attrs.get("questions", []):
+            rpo = q.get("reading_passage_order")
+            if rpo is not None and rpo not in passage_order_set:
+                raise serializers.ValidationError(
+                    {
+                        "questions": "Bir soru, tanımlı olmayan bir okuma metni sırasına (reading_passage_order) bağlı."
+                    }
+                )
+        return attrs
 
 
 class KidsTestDistributeSerializer(serializers.Serializer):
@@ -83,6 +117,7 @@ class KidsTestDistributeSerializer(serializers.Serializer):
 class KidsTestQuestionSerializer(serializers.ModelSerializer):
     source_page_order = serializers.SerializerMethodField()
     source_image_url = serializers.SerializerMethodField()
+    reading_passage_order = serializers.SerializerMethodField()
 
     class Meta:
         model = KidsTestQuestion
@@ -95,11 +130,15 @@ class KidsTestQuestionSerializer(serializers.ModelSerializer):
             "choices",
             "correct_choice_key",
             "points",
+            "reading_passage_order",
             "source_page_order",
             "source_image_url",
             "source_meta",
         )
         read_only_fields = fields
+
+    def get_reading_passage_order(self, obj):
+        return obj.reading_passage.order if obj.reading_passage_id else None
 
     def get_source_page_order(self, obj):
         return obj.source_image.page_order if obj.source_image_id else None
@@ -127,9 +166,17 @@ class KidsTestSourceImageSerializer(serializers.ModelSerializer):
         return _absolute_media_url(request, obj.image.url)
 
 
+class KidsTestReadingPassageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = KidsTestReadingPassage
+        fields = ("id", "order", "title", "body", "created_at", "updated_at")
+        read_only_fields = fields
+
+
 class KidsTestSerializer(serializers.ModelSerializer):
     questions = KidsTestQuestionSerializer(many=True, read_only=True)
     source_images = KidsTestSourceImageSerializer(many=True, read_only=True)
+    passages = KidsTestReadingPassageSerializer(many=True, read_only=True, source="reading_passages")
 
     class Meta:
         model = KidsTest
@@ -143,6 +190,7 @@ class KidsTestSerializer(serializers.ModelSerializer):
             "duration_minutes",
             "status",
             "published_at",
+            "passages",
             "questions",
             "source_images",
             "created_at",

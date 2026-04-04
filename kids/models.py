@@ -1175,10 +1175,42 @@ class KidsTestSourceImage(models.Model):
         ]
 
 
+class KidsTestReadingPassage(models.Model):
+    """Okuma metni / hikâye: aynı metne bağlı birden çok soru için tek blok."""
+
+    test = models.ForeignKey(
+        KidsTest,
+        on_delete=models.CASCADE,
+        related_name="reading_passages",
+    )
+    order = models.PositiveSmallIntegerField(default=1)
+    title = models.CharField(max_length=300, blank=True, default="")
+    body = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_test_reading_passages"
+        ordering = ["order", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["test", "order"],
+                name="kids_test_passage_test_order_uniq",
+            ),
+        ]
+
+
 class KidsTestQuestion(models.Model):
     test = models.ForeignKey(
         KidsTest,
         on_delete=models.CASCADE,
+        related_name="questions",
+    )
+    reading_passage = models.ForeignKey(
+        "KidsTestReadingPassage",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="questions",
     )
     order = models.PositiveSmallIntegerField(default=1)
