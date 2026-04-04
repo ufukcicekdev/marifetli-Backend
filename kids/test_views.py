@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 import json
+import re
 
 import os
 
@@ -51,6 +52,20 @@ from .tests_ai import extract_test_from_images
 
 def _questions_prefetch_queryset():
     return KidsTestQuestion.objects.select_related("source_image").order_by("order", "id")
+
+
+def _stem_for_student_view(stem: str) -> str:
+    """Soru kökünde sonda kalan '(FEN BİLİMLERİ)' gibi konu etiketlerini öğrenciye gösterme."""
+    s = (stem or "").strip()
+    if not s:
+        return s
+    paren_tail = re.compile(r"\s*\([^)]{1,200}\)\s*$")
+    for _ in range(6):
+        ns = paren_tail.sub("", s).strip()
+        if ns == s:
+            return s
+        s = ns
+    return s
 
 
 def _attach_question_source_image(
@@ -424,9 +439,7 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                 q_payload: dict = {
                     "id": q.id,
                     "order": q.order,
-                    "stem": q.stem,
-                    "topic": q.topic,
-                    "subtopic": q.subtopic,
+                    "stem": _stem_for_student_view(q.stem),
                     "choices": q.choices,
                     "points": q.points,
                     "source_image_url": src_url,
