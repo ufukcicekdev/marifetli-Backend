@@ -8,7 +8,7 @@ import os
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Count, Exists, OuterRef, Prefetch, Q
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -405,7 +405,15 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
         if is_kids_student_user(request.user):
             if not _student_test_queryset(request.user).filter(pk=row.id).exists():
                 return Response(status=status.HTTP_404_NOT_FOUND)
-            attempt = KidsTestAttempt.objects.filter(test=row, student=request.user).first()
+            attempt = (
+                KidsTestAttempt.objects.filter(test=row, student=request.user)
+                .prefetch_related("answers")
+                .first()
+            )
+            answers_by_q: dict[int, KidsTestAnswer] = {}
+            if attempt and attempt.submitted_at:
+                for a in attempt.answers.all():
+                    answers_by_q[a.question_id] = a
             questions = []
             for q in row.questions.all():
                 src_url = None
@@ -413,19 +421,24 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                 if q.source_image_id and q.source_image and getattr(q.source_image, "image", None):
                     src_url = _absolute_media_url(request, q.source_image.image.url)
                     src_po = q.source_image.page_order
-                questions.append(
-                    {
-                        "id": q.id,
-                        "order": q.order,
-                        "stem": q.stem,
-                        "topic": q.topic,
-                        "subtopic": q.subtopic,
-                        "choices": q.choices,
-                        "points": q.points,
-                        "source_image_url": src_url,
-                        "source_page_order": src_po,
-                    }
-                )
+                q_payload: dict = {
+                    "id": q.id,
+                    "order": q.order,
+                    "stem": q.stem,
+                    "topic": q.topic,
+                    "subtopic": q.subtopic,
+                    "choices": q.choices,
+                    "points": q.points,
+                    "source_image_url": src_url,
+                    "source_page_order": src_po,
+                }
+                if attempt and attempt.submitted_at:
+                    ans = answers_by_q.get(q.id)
+                    q_payload["selected_choice_key"] = (ans.selected_choice_key or "").strip().upper() if ans else ""
+                    q_payload["is_correct"] = bool(ans.is_correct) if ans else False
+                    ck = (q.correct_choice_key or "").strip().upper()
+                    q_payload["correct_choice_key"] = ck if ck else None
+                questions.append(q_payload)
             return Response(
                 {
                     "id": row.id,
@@ -508,12 +521,23 @@ class KidsStudentTestListView(KidsAuthenticatedMixin, APIView):
     def get(self, request):
         if not is_kids_student_user(request.user):
             return Response(status=status.HTTP_403_FORBIDDEN)
+        sid = request.user.pk
+        attempt_for_student = KidsTestAttempt.objects.filter(test_id=OuterRef("pk"), student_id=sid)
+        attempt_submitted = KidsTestAttempt.objects.filter(
+            test_id=OuterRef("pk"), student_id=sid, submitted_at__isnull=False
+        )
         tests = (
             _student_test_queryset(request.user)
             .annotate(question_count=Count("questions"))
+            .annotate(
+                _has_attempt=Exists(attempt_for_student),
+                _is_submitted=Exists(attempt_submitted),
+            )
             .order_by("-published_at", "-created_at")
         )
-        return Response(KidsStudentTestListSerializer(tests, many=True).data)
+        return Response(
+            KidsStudentTestListSerializer(tests, many=True, context={"request": request}).data
+        )
 
 
 class KidsStudentTestStartView(KidsAuthenticatedMixin, APIView):

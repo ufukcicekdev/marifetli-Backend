@@ -12,7 +12,8 @@ from channels.layers import get_channel_layer
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Count, F, Max, Q
+from django.db.models import Count, F, IntegerField, Max, OuterRef, Q, Subquery
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from emails.services import EmailService
 from rest_framework import generics, status
@@ -303,6 +304,19 @@ def _teacher_class_queryset(user):
     return qs.filter(
         Q(teacher=user) | Q(teacher_assignments__teacher=user, teacher_assignments__is_active=True)
     ).distinct()
+
+
+def _annotate_class_student_count(qs):
+    """Öğretmen listesinde join + distinct ile Count bozulmasın diye alt sorgu."""
+    enrollment_sq = (
+        KidsEnrollment.objects.filter(kids_class_id=OuterRef("pk"))
+        .values("kids_class_id")
+        .annotate(_cnt=Count("id"))
+        .values("_cnt")
+    )
+    return qs.annotate(
+        student_count=Coalesce(Subquery(enrollment_sq, output_field=IntegerField()), 0)
+    )
 
 
 def _teacher_can_access_class(user, class_id: int) -> bool:
@@ -2166,7 +2180,7 @@ class KidsClassListCreateView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def get(self, request):
-        qs = _teacher_class_queryset(request.user)
+        qs = _annotate_class_student_count(_teacher_class_queryset(request.user))
         return Response(KidsClassSerializer(qs, many=True, context={"request": request}).data)
 
     def post(self, request):
@@ -2178,7 +2192,11 @@ class KidsClassListCreateView(KidsAuthenticatedMixin, APIView):
             teacher=request.user,
             defaults={"subject": "Sınıf Öğretmeni", "is_active": True},
         )
-        kids_class = KidsClass.objects.select_related("school", "teacher").get(pk=kids_class.pk)
+        kids_class = _annotate_class_student_count(
+            KidsClass.objects.filter(pk=kids_class.pk).select_related("school", "teacher").prefetch_related(
+                "teacher_assignments__teacher"
+            )
+        ).first()
         return Response(
             KidsClassSerializer(kids_class, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
@@ -2189,7 +2207,7 @@ class KidsClassDetailView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
 
     def get_object(self, request, pk):
-        return _teacher_class_queryset(request.user).filter(pk=pk).first()
+        return _annotate_class_student_count(_teacher_class_queryset(request.user)).filter(pk=pk).first()
 
     def get(self, request, pk):
         obj = self.get_object(request, pk)

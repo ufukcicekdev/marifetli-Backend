@@ -153,13 +153,31 @@ class KidsTestSerializer(serializers.ModelSerializer):
 
 class KidsStudentTestListSerializer(serializers.ModelSerializer):
     question_count = serializers.SerializerMethodField()
+    attempt_status = serializers.SerializerMethodField()
 
     class Meta:
         model = KidsTest
-        fields = ("id", "kids_class", "title", "instructions", "duration_minutes", "published_at", "question_count")
+        fields = (
+            "id",
+            "kids_class",
+            "title",
+            "instructions",
+            "duration_minutes",
+            "published_at",
+            "question_count",
+            "attempt_status",
+        )
 
     def get_question_count(self, obj):
         return int(getattr(obj, "question_count", 0) or 0)
+
+    def get_attempt_status(self, obj):
+        """Öğrenci listesi: pending | in_progress | submitted (serializer context request.user)."""
+        if getattr(obj, "_is_submitted", False):
+            return "submitted"
+        if getattr(obj, "_has_attempt", False):
+            return "in_progress"
+        return "pending"
 
 
 class KidsStudentTestSubmitSerializer(serializers.Serializer):

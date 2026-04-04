@@ -416,6 +416,7 @@ class KidsAdminSchoolCreateSerializer(serializers.Serializer):
 class KidsClassSerializer(serializers.ModelSerializer):
     teacher_email = serializers.EmailField(source="teacher.email", read_only=True)
     teachers = serializers.SerializerMethodField()
+    student_count = serializers.SerializerMethodField()
     school = KidsSchoolSerializer(read_only=True)
     school_id = serializers.PrimaryKeyRelatedField(
         queryset=KidsSchool.objects.none(),
@@ -439,10 +440,18 @@ class KidsClassSerializer(serializers.ModelSerializer):
             "teacher",
             "teacher_email",
             "teachers",
+            "student_count",
             "created_at",
             "updated_at",
         )
-        read_only_fields = ("teacher", "teacher_email", "school", "created_at", "updated_at")
+        read_only_fields = (
+            "teacher",
+            "teacher_email",
+            "school",
+            "student_count",
+            "created_at",
+            "updated_at",
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -510,6 +519,12 @@ class KidsClassSerializer(serializers.ModelSerializer):
                     }
                 )
         return attrs
+
+    def get_student_count(self, obj):
+        annotated = getattr(obj, "student_count", None)
+        if annotated is not None:
+            return int(annotated)
+        return KidsEnrollment.objects.filter(kids_class_id=obj.pk).count()
 
     def get_teachers(self, obj):
         out = []
