@@ -31,6 +31,7 @@ from .serializers import (
     KidsKindergartenDailyRecordSerializer,
     KidsKindergartenDailyRecordWriteSerializer,
     KidsKindergartenDayPlanSerializer,
+    _absolute_media_url,
 )
 from .views import KidsAuthenticatedMixin, _teacher_can_access_class
 
@@ -119,6 +120,9 @@ class KidsKindergartenDailyBoardView(KidsAuthenticatedMixin, APIView):
         for en in enrollments:
             st = en.student
             rec = rec_map.get(st.id)
+            pic = None
+            if getattr(st, "profile_picture", None) and st.profile_picture:
+                pic = _absolute_media_url(request, st.profile_picture.url)
             rows.append(
                 {
                     "student": {
@@ -126,6 +130,7 @@ class KidsKindergartenDailyBoardView(KidsAuthenticatedMixin, APIView):
                         "first_name": st.first_name or "",
                         "last_name": st.last_name or "",
                         "email": st.email,
+                        "profile_picture": pic,
                     },
                     "record": KidsKindergartenDailyRecordSerializer(rec).data if rec else None,
                 }
