@@ -1,4 +1,7 @@
 from rest_framework import serializers
+
+from blog.blog_payload import normalize_n8n_blog_fields
+
 from .models import BlogPost, BlogComment, BlogLike
 from users.serializers import UserSerializer
 
@@ -40,13 +43,34 @@ class BlogCommentCreateSerializer(serializers.ModelSerializer):
 
 class BlogPostCreateSerializer(serializers.ModelSerializer):
     """n8n / otomasyon API için: title, content zorunlu; excerpt, is_published opsiyonel."""
+
+    # Model title max 200; otomasyon bazen tüm JSON'u tek string olarak gönderir — önce geniş kabul edilir.
+    title = serializers.CharField(max_length=20000)
+    excerpt = serializers.CharField(required=False, allow_blank=True, max_length=20000, default='')
+
     class Meta:
         model = BlogPost
         fields = ('title', 'excerpt', 'content', 'is_published')
         extra_kwargs = {
-            'excerpt': {'required': False, 'allow_blank': True},
             'is_published': {'required': False, 'default': True},
         }
+
+    def validate(self, attrs):
+        t, e, c = normalize_n8n_blog_fields(
+            attrs.get('title'),
+            attrs.get('excerpt'),
+            attrs.get('content'),
+        )
+        if not (t or '').strip():
+            raise serializers.ValidationError({'title': 'Başlık gerekli.'})
+        if not (c or '').strip():
+            raise serializers.ValidationError(
+                {'content': 'İçerik gerekli. Tüm gövdeyi tek JSON olarak gönderdiyseniz title/excerpt/content anahtarları olmalı.'}
+            )
+        attrs['title'] = t
+        attrs['excerpt'] = e
+        attrs['content'] = c
+        return attrs
 
 
 class BlogPostDetailSerializer(serializers.ModelSerializer):

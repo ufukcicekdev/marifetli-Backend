@@ -1,4 +1,3 @@
-import json
 import logging
 import re
 from html import escape
@@ -9,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 
+from blog.blog_payload import parse_blog_json, strip_code_fences
 from blog.models import BlogPost, BlogTopicQueue
 from bot_activity.gemini_client import _call_gemini
 
@@ -25,78 +25,8 @@ def _get_blog_author():
     return User.objects.filter(is_superuser=True).order_by("pk").first()
 
 
-def _parse_blog_json(raw_text: str) -> dict:
-    if not raw_text:
-        return {}
-    cleaned = _strip_code_fences(raw_text)
-    try:
-        data = json.loads(cleaned)
-        if isinstance(data, dict):
-            return data
-    except json.JSONDecodeError:
-        pass
-    # İlk tam JSON objesini bul (string içindeki { } karakterlerini görmezden gel).
-    start = cleaned.find("{")
-    if start >= 0:
-        i = start
-        depth = 0
-        in_string = False
-        escape_on = False
-        quote = '"'
-        while i < len(cleaned):
-            c = cleaned[i]
-            if in_string:
-                if escape_on:
-                    escape_on = False
-                elif c == "\\":
-                    escape_on = True
-                elif c == quote:
-                    in_string = False
-            else:
-                if c in ('"', "'"):
-                    in_string = True
-                    quote = c
-                elif c == "{":
-                    depth += 1
-                elif c == "}":
-                    depth -= 1
-                    if depth == 0:
-                        chunk = cleaned[start : i + 1]
-                        try:
-                            data = json.loads(chunk)
-                            if isinstance(data, dict):
-                                return data
-                        except json.JSONDecodeError:
-                            break
-            i += 1
-    # JSON bozulmuşsa kritik alanları regex ile kurtar.
-    def _pull(key: str) -> str:
-        m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', cleaned, flags=re.DOTALL)
-        if m:
-            return m.group(1).strip()
-        m2 = re.search(rf'"{key}"\s*:\s*"(.+)$', cleaned, flags=re.DOTALL)
-        if m2:
-            return m2.group(1).strip()
-        return ""
-
-    title = _pull("title")[:200]
-    excerpt = _pull("excerpt")[:280]
-    content = _pull("content").strip()
-    if title or excerpt or content:
-        return {"title": title, "excerpt": excerpt, "content": content}
-    return {}
-
-
-def _strip_code_fences(raw_text: str) -> str:
-    if not raw_text:
-        return ""
-    cleaned = re.sub(r"^```(?:json|markdown|md|html|text)?\s*\n?", "", raw_text.strip(), flags=re.IGNORECASE)
-    cleaned = re.sub(r"\n?```\s*$", "", cleaned).strip()
-    return cleaned
-
-
 def _text_to_html(raw_text: str) -> str:
-    cleaned = _strip_code_fences(raw_text)
+    cleaned = strip_code_fences(raw_text)
     if not cleaned:
         return ""
     # Zaten HTML üretildiyse olduğu gibi kullan.
@@ -119,7 +49,7 @@ def _text_to_html(raw_text: str) -> str:
 
 
 def _first_nonempty_line(raw_text: str) -> str:
-    for ln in _strip_code_fences(raw_text).splitlines():
+    for ln in strip_code_fences(raw_text).splitlines():
         s = ln.strip()
         if s and s not in {"{", "}", "[", "]"}:
             return s
@@ -127,7 +57,7 @@ def _first_nonempty_line(raw_text: str) -> str:
 
 
 def _fallback_payload_from_raw(topic: str, raw_text: str) -> dict:
-    cleaned = _strip_code_fences(raw_text)
+    cleaned = strip_code_fences(raw_text)
     if not cleaned:
         return {}
     heading = re.search(r"^\s{0,3}#{1,6}\s+(.+)$", cleaned, flags=re.MULTILINE)
@@ -193,12 +123,14 @@ def generate_blog_from_queue():
 
     prompt = _build_prompt(topic_row.topic)
     raw = _call_gemini(prompt, max_tokens=2200)
-    parsed = _parse_blog_json(raw)
+    parsed = parse_blog_json(raw)
     if not parsed:
         parsed = _fallback_payload_from_raw(topic_row.topic, raw)
     title = (parsed.get("title") or topic_row.topic).strip()[:200]
     excerpt = (parsed.get("excerpt") or "").strip()[:280]
     content = (parsed.get("content") or "").strip()
+    if not content and excerpt:
+        content = f"<p>{escape(excerpt)}</p>"
     if not content:
         topic_row.last_error = "Gemini yaniti bos veya gecersiz JSON."
         topic_row.save(update_fields=["last_error", "updated_at"])
