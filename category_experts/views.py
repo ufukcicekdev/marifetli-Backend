@@ -1,5 +1,6 @@
 import logging
 import mimetypes
+import os
 
 from django.conf import settings
 from rest_framework import status
@@ -122,6 +123,19 @@ def _attachment_payload(uploaded) -> tuple[bytes | None, str | None]:
     return raw, mime
 
 
+def _attachment_original_name(uploaded) -> str | None:
+    """Yüklenen dosyanın güvenli basename'i (moderator /chat attachment_name)."""
+    if not uploaded:
+        return None
+    raw = (getattr(uploaded, "name", None) or "").strip()
+    if not raw:
+        return None
+    base = os.path.basename(raw.replace("\\", "/"))
+    if not base or base in (".", ".."):
+        return None
+    return base[:255]
+
+
 class CategoryExpertAskView(APIView):
     permission_classes = [IsAuthenticated, IsVerified]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
@@ -147,6 +161,7 @@ class CategoryExpertAskView(APIView):
         question = ser.validated_data["question"]
         att_file = ser.validated_data.get("attachment")
         attachment_bytes, attachment_mime = _attachment_payload(att_file)
+        attachment_name = _attachment_original_name(att_file)
 
         remaining, cap = user_remaining_questions(request.user)
         if cap > 0 and remaining <= 0:
@@ -190,6 +205,7 @@ class CategoryExpertAskView(APIView):
                 extra_instructions=expert.extra_instructions or "",
                 attachment_bytes=attachment_bytes,
                 attachment_mime=attachment_mime,
+                attachment_name=attachment_name,
             )
         except Exception:
             logger.exception("CategoryExpert ask: provider hatası")

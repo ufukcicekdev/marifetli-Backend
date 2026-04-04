@@ -54,12 +54,25 @@ Admin: **Kategori uzmanları** — yeni ana kategori ekledikten sonra uzman kayd
 | POST | `/api/category-experts/ask/` | JWT + doğrulanmış e-posta: JSON `{ main_category_id, subcategory_id?, question }` veya `multipart/form-data` ile aynı alanlar + isteğe bağlı `attachment` (JPEG/PNG/WebP/GIF, max 5MB). Görsel varsa soru metni 1+ karakter yeterli. |
 | GET | `/api/category-experts/my-history/` | Son 50 soru–cevap |
 
+## Görsel eki gerçekten modele gidiyor mu?
+
+- **Frontend:** `multipart/form-data` ile `attachment` alanında dosya gönderilir (`api.askCategoryExpert`).
+- **Django:** Dosya okunur; MIME önce **dosya imzası (magic bytes)**, sonra `Content-Type` / dosya adı ile belirlenir. `generate_answer(..., attachment_bytes=..., attachment_mime=..., attachment_name=...)` çağrılır.
+- **`CATEGORY_EXPERT_LLM_PROVIDER=gemini`:** Görsel doğrudan Gemini’ye multimodal olarak gider.
+- **`CATEGORY_EXPERT_LLM_PROVIDER=moderator_chat`:** Harici `/chat` uç noktasına **JSON** gider. Görsel varsa gövdeye şunlar eklenir (isimler birebir bu olmalı; servis farklı anahtar bekliyorsa görsel yok sayılır ve model sadece metne bakar):
+  - `message` (string, tam sistem + kullanıcı metni)
+  - `attachment_base64` (standart Base64, satır sonu yok)
+  - `attachment_mime_type` (örn. `image/jpeg`, `image/png`; parametre yok, küçük harf)
+  - `attachment_name` (isteğe bağlı; yüklenen dosyanın güvenli `basename`’i — moderator servisiyle uyum)
+
+Yanıt hâlâ “görseli görmemiş gibi” veya yanlış yorumluyorsa: Railway `/chat` kodunda Base64 + MIME’nin decode edilip modele **görüntü** olarak verildiğini doğrulayın; sadece `message` okunuyorsa analiz metin tabanlı kalır.
+
 ## Kendi modelinizi bağlamak
 
 1. `category_experts/providers/` altında veya projenizde bir sınıf yazın:
    - `name: str`
    - `is_configured(self) -> bool`
-   - `generate_answer(self, *, question, main_category_name, subcategory_name, expert_display_name, extra_instructions, attachment_bytes=None, attachment_mime=None) -> str`
+   - `generate_answer(self, *, question, main_category_name, subcategory_name, expert_display_name, extra_instructions, attachment_bytes=None, attachment_mime=None, attachment_name=None) -> str`
 
 2. `.env`: `CATEGORY_EXPERT_LLM_PROVIDER=mypackage.mymodule.MyExpertProvider`
 

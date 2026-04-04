@@ -44,6 +44,7 @@ class ModeratorChatExpertProvider:
         extra_instructions: str,
         attachment_bytes: bytes | None = None,
         attachment_mime: str | None = None,
+        attachment_name: str | None = None,
     ) -> str:
         url = (getattr(settings, "CATEGORY_EXPERT_CHAT_URL", "") or "").strip()
         if not url:
@@ -61,8 +62,9 @@ class ModeratorChatExpertProvider:
         att_intro = ""
         if attachment_bytes and attachment_mime:
             att_intro = (
-                "\nKullanıcı bir görsel eki göndermiştir. İstek gövdesindeki `attachment_base64` ve "
-                "`attachment_mime_type` alanlarını kullanarak görseli incele ve soruya göre yanıt ver.\n"
+                "\nKullanıcı bir görsel eki göndermiştir. İstek gövdesindeki `attachment_base64`, "
+                "`attachment_mime_type` ve varsa `attachment_name` alanlarını kullanarak görseli incele "
+                "ve soruya göre yanıt ver.\n"
             )
 
         # Tek "message" alanında tam bağlam (Gemini prompt ile aynı mantık)
@@ -90,6 +92,8 @@ Yanıtın (sadece cevap metni, markdown kullanabilirsin):"""
         if attachment_bytes and attachment_mime:
             payload["attachment_base64"] = base64.b64encode(attachment_bytes).decode("ascii")
             payload["attachment_mime_type"] = (attachment_mime or "image/jpeg").split(";")[0].strip().lower()
+            if attachment_name and str(attachment_name).strip():
+                payload["attachment_name"] = str(attachment_name).strip()[:255]
 
         try:
             r = requests.post(url, json=payload, headers=headers, timeout=timeout)

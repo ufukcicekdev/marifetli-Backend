@@ -28,6 +28,7 @@ class GeminiExpertProvider:
         extra_instructions: str,
         attachment_bytes: bytes | None = None,
         attachment_mime: str | None = None,
+        attachment_name: str | None = None,
     ) -> str:
         sub_line = (
             f"\nKullanıcı şu alt konuyla ilgileniyor: **{subcategory_name}**.\n"

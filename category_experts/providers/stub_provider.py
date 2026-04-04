@@ -20,6 +20,7 @@ class StubExpertProvider:
         extra_instructions: str,
         attachment_bytes: bytes | None = None,
         attachment_mime: str | None = None,
+        attachment_name: str | None = None,
     ) -> str:
         sub = f" (Alt konu: {subcategory_name})" if subcategory_name else ""
         att = " Görsel eki: var." if attachment_bytes else ""
