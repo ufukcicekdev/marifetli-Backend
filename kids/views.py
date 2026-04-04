@@ -244,7 +244,9 @@ def _map_user_to_api_role(u: MainUser) -> str:
         return "teacher"
     if r == KidsPortalRole.PARENT:
         return "parent"
-    return "teacher"
+    # Boş / bilinmeyen kids_portal_role: Kids API öğretmen izni vermez; "teacher" dönmemek gerekir
+    # (aksi halde arayüz öğretmen paneline girer, /classes/ vb. 403 olur).
+    return "none"
 
 
 def _account_kids_payload(u: MainUser, request) -> dict:
