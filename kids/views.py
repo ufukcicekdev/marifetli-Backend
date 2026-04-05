@@ -4511,7 +4511,32 @@ class KidsAnnouncementListCreateView(KidsAuthenticatedMixin, APIView):
         qs = _announcement_query_for_user(request.user).select_related(
             "kids_class", "school", "created_by"
         ).prefetch_related("attachments")
-        return Response(KidsAnnouncementSerializer(qs, many=True, context={"request": request}).data)
+        qs = qs.order_by("-is_pinned", "-published_at", "-created_at")
+        limit_raw = request.query_params.get("limit")
+        if limit_raw is None:
+            return Response(KidsAnnouncementSerializer(qs, many=True, context={"request": request}).data)
+        try:
+            limit = int(limit_raw)
+        except ValueError:
+            limit = 3
+        limit = max(1, min(limit, 50))
+        try:
+            offset = int(request.query_params.get("offset", 0))
+        except ValueError:
+            offset = 0
+        offset = max(0, offset)
+        total = qs.count()
+        page = qs[offset : offset + limit]
+        data = KidsAnnouncementSerializer(page, many=True, context={"request": request}).data
+        return Response(
+            {
+                "results": data,
+                "count": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + limit < total,
+            }
+        )
 
     def post(self, request):
         if not is_main_user(request.user) or not is_kids_teacher_or_admin_user(request.user):

@@ -1531,6 +1531,7 @@ class KidsAnnouncementSerializer(serializers.ModelSerializer):
             "target_role",
             "title",
             "body",
+            "category",
             "is_pinned",
             "is_published",
             "published_at",

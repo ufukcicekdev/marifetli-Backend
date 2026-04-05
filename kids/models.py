@@ -1597,6 +1597,11 @@ class KidsAnnouncement(models.Model):
         CLASS = "class", "Sınıf"
         SCHOOL = "school", "Okul"
 
+    class Category(models.TextChoices):
+        EVENT = "event", "Etkinlik"
+        INFO = "info", "Bilgilendirme"
+        GENERAL = "general", "Genel"
+
     class TargetRole(models.TextChoices):
         ALL = "all", "Herkes"
         PARENT = "parent", "Veli"
@@ -1626,6 +1631,12 @@ class KidsAnnouncement(models.Model):
     )
     title = models.CharField(max_length=240)
     body = models.TextField(max_length=5000)
+    category = models.CharField(
+        max_length=16,
+        choices=Category.choices,
+        default=Category.GENERAL,
+        db_index=True,
+    )
     is_pinned = models.BooleanField(default=False, db_index=True)
     is_published = models.BooleanField(default=False, db_index=True)
     published_at = models.DateTimeField(null=True, blank=True, db_index=True)
