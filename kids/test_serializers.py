@@ -112,6 +112,7 @@ class KidsTestDistributeSerializer(serializers.Serializer):
         allow_empty=False,
         max_length=30,
     )
+    duration_minutes = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=300)
 
 
 class KidsTestQuestionSerializer(serializers.ModelSerializer):
@@ -177,6 +178,7 @@ class KidsTestSerializer(serializers.ModelSerializer):
     questions = KidsTestQuestionSerializer(many=True, read_only=True)
     source_images = KidsTestSourceImageSerializer(many=True, read_only=True)
     passages = KidsTestReadingPassageSerializer(many=True, read_only=True, source="reading_passages")
+    deletable = serializers.SerializerMethodField()
 
     class Meta:
         model = KidsTest
@@ -195,8 +197,15 @@ class KidsTestSerializer(serializers.ModelSerializer):
             "source_images",
             "created_at",
             "updated_at",
+            "deletable",
         )
         read_only_fields = fields
+
+    def get_deletable(self, obj):
+        n = getattr(obj, "_attempt_count", None)
+        if n is not None:
+            return int(n) == 0
+        return not KidsTestAttempt.objects.filter(test_id=obj.pk).exists()
 
 
 class KidsStudentTestListSerializer(serializers.ModelSerializer):

@@ -530,6 +530,15 @@ class VideoDurationChoice(models.IntegerChoices):
     THREE_MIN = 180, "3 dk"
 
 
+class ChallengeCardTheme(models.TextChoices):
+    """Öğretmen listesinde challenge kartı üst bandı / etiket teması (içerik kategorisi değil)."""
+
+    ART = "art", "art"
+    SCIENCE = "science", "science"
+    MOTION = "motion", "motion"
+    MUSIC = "music", "music"
+
+
 class KidsAssignment(models.Model):
     class RecurrenceType(models.TextChoices):
         NONE = "none", "Tek sefer"
@@ -606,6 +615,14 @@ class KidsAssignment(models.Model):
         default=list,
         blank=True,
         help_text="Rubrik kriterleri listesi: [{id,label,max_points,weight?}]",
+    )
+    challenge_card_theme = models.CharField(
+        "challenge kartı görünüm teması",
+        max_length=16,
+        blank=True,
+        null=True,
+        choices=ChallengeCardTheme.choices,
+        help_text="Öğretmen/öğrenci listesinde kart üst bandı ve etiket; boşsa istemci id’ye göre varsayılan döner.",
     )
     is_published = models.BooleanField(default=True)
     students_notified_at = models.DateTimeField(
@@ -1123,6 +1140,8 @@ class KidsTest(models.Model):
         KidsClass,
         on_delete=models.CASCADE,
         related_name="tests",
+        null=True,
+        blank=True,
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

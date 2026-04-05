@@ -124,6 +124,16 @@ def _teacher_class_queryset(user):
     ).distinct()
 
 
+def _teacher_can_access_test(user, row: KidsTest) -> bool:
+    if not is_main_user(user):
+        return False
+    if is_kids_admin_user(user):
+        return True
+    if row.kids_class_id is None:
+        return row.created_by_id == user.id
+    return _teacher_class_queryset(user).filter(pk=row.kids_class_id).exists()
+
+
 def _student_test_queryset(user):
     if not is_kids_student_user(user):
         return KidsTest.objects.none()
@@ -324,6 +334,90 @@ class KidsClassTestListCreateView(KidsAuthenticatedMixin, APIView):
         return Response(KidsTestSerializer(row, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
+class KidsTestStandaloneCreateView(KidsAuthenticatedMixin, APIView):
+    """Sınıfa bağlı olmayan taslak test (öğretmen arşivi)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not is_main_user(request.user) or not is_kids_teacher_or_admin_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        raw_questions = request.data.get("questions")
+        parsed_questions = raw_questions
+        if isinstance(raw_questions, str):
+            try:
+                parsed_questions = json.loads(raw_questions)
+            except json.JSONDecodeError:
+                return Response({"detail": "Sorular JSON formatında olmalı."}, status=status.HTTP_400_BAD_REQUEST)
+        raw_passages = request.data.get("passages")
+        parsed_passages = raw_passages
+        if isinstance(raw_passages, str):
+            try:
+                parsed_passages = json.loads(raw_passages or "[]")
+            except json.JSONDecodeError:
+                return Response({"detail": "Okuma metinleri JSON formatında olmalı."}, status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(parsed_passages, list):
+            parsed_passages = []
+        payload = {
+            "title": request.data.get("title"),
+            "instructions": request.data.get("instructions", ""),
+            "duration_minutes": request.data.get("duration_minutes"),
+            "status": KidsTest.Status.DRAFT,
+            "passages": parsed_passages,
+            "questions": parsed_questions,
+            "source_images": request.FILES.getlist("source_images") if hasattr(request, "FILES") else [],
+        }
+        ser = KidsTestCreateSerializer(data=payload)
+        ser.is_valid(raise_exception=True)
+        data = ser.validated_data
+        with transaction.atomic():
+            row = KidsTest.objects.create(
+                kids_class=None,
+                created_by=request.user,
+                title=data["title"].strip(),
+                instructions=(data.get("instructions") or "").strip(),
+                duration_minutes=data.get("duration_minutes"),
+                status=KidsTest.Status.DRAFT,
+                published_at=None,
+            )
+            images_by_page: dict[int, KidsTestSourceImage] = {}
+            for idx, image in enumerate(data.get("source_images") or [], start=1):
+                img_row = KidsTestSourceImage.objects.create(
+                    test=row,
+                    image=image,
+                    page_order=idx,
+                )
+                images_by_page[idx] = img_row
+            passage_by_order = _create_reading_passages_for_test(row, data.get("passages") or [])
+            for q in data["questions"]:
+                src = _attach_question_source_image(images_by_page, q.get("source_page_order"))
+                rpo = q.get("reading_passage_order")
+                rp = passage_by_order.get(int(rpo)) if rpo is not None else None
+                KidsTestQuestion.objects.create(
+                    test=row,
+                    order=q["order"],
+                    stem=q["stem"].strip(),
+                    topic=(q.get("topic") or "").strip(),
+                    subtopic=(q.get("subtopic") or "").strip(),
+                    choices=q["choices"],
+                    correct_choice_key=q["correct_choice_key"],
+                    points=q.get("points") or 1.0,
+                    source_image=src,
+                    reading_passage=rp,
+                )
+        row = (
+            KidsTest.objects.select_related("kids_class", "created_by")
+            .prefetch_related(
+                Prefetch("questions", queryset=_questions_prefetch_queryset()),
+                "source_images",
+                "reading_passages",
+            )
+            .annotate(_attempt_count=Count("attempts", distinct=True))
+            .get(pk=row.pk)
+        )
+        return Response(KidsTestSerializer(row, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+
 class KidsMyCreatedTestListView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated]
 
@@ -338,6 +432,7 @@ class KidsMyCreatedTestListView(KidsAuthenticatedMixin, APIView):
                 "source_images",
                 "reading_passages",
             )
+            .annotate(_attempt_count=Count("attempts", distinct=True))
             .order_by("-published_at", "-created_at")
         )
         return Response(KidsTestSerializer(tests, many=True, context={"request": request}).data)
@@ -349,30 +444,60 @@ class KidsTestDistributeView(KidsAuthenticatedMixin, APIView):
     def post(self, request, test_id):
         if not is_main_user(request.user) or not is_kids_teacher_or_admin_user(request.user):
             return Response(status=status.HTTP_403_FORBIDDEN)
-        source = (
-            KidsTest.objects.filter(pk=test_id)
-            .prefetch_related(
-                Prefetch("questions", queryset=_questions_prefetch_queryset()),
-                "source_images",
-                "reading_passages",
-            )
-            .first()
-        )
-        if not source:
-            return Response(status=status.HTTP_404_NOT_FOUND)
-        if not is_kids_admin_user(request.user) and source.created_by_id != request.user.id:
-            return Response(status=status.HTTP_403_FORBIDDEN)
         ser = KidsTestDistributeSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         allowed_classes = _teacher_class_queryset(request.user).values_list("id", flat=True)
         allowed_set = set(allowed_classes)
-        class_ids = [cid for cid in ser.validated_data["class_ids"] if cid in allowed_set]
+        seen: set[int] = set()
+        class_ids: list[int] = []
+        for cid in ser.validated_data["class_ids"]:
+            if cid in allowed_set and cid not in seen:
+                seen.add(cid)
+                class_ids.append(cid)
         if not class_ids:
             return Response({"detail": "Geçerli hedef sınıf seçilmedi."}, status=status.HTTP_400_BAD_REQUEST)
 
         created_ids: list[int] = []
         skipped_class_ids: list[int] = []
+        home_class_assigned = False
+        source_notify_id: int | None = None
+
         with transaction.atomic():
+            source = (
+                KidsTest.objects.select_for_update()
+                .filter(pk=test_id)
+                .prefetch_related(
+                    Prefetch("questions", queryset=_questions_prefetch_queryset()),
+                    "source_images",
+                    "reading_passages",
+                )
+                .first()
+            )
+            if not source:
+                return Response(status=status.HTTP_404_NOT_FOUND)
+            if not is_kids_admin_user(request.user) and source.created_by_id != request.user.id:
+                return Response(status=status.HTTP_403_FORBIDDEN)
+
+            dur = ser.validated_data.get("duration_minutes")
+            if dur is None:
+                dur = source.duration_minutes
+            if dur is None:
+                return Response(
+                    {"detail": "Süre (dakika) gerekli. Dağıtım penceresinden girin."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            source.duration_minutes = int(dur)
+
+            was_unassigned = source.kids_class_id is None
+            if was_unassigned:
+                source.kids_class_id = class_ids[0]
+                source.status = KidsTest.Status.PUBLISHED
+                if source.published_at is None:
+                    source.published_at = timezone.now()
+                home_class_assigned = True
+                source_notify_id = source.id
+            source.save()
+
             for class_id in class_ids:
                 if class_id == source.kids_class_id:
                     skipped_class_ids.append(class_id)
@@ -423,6 +548,7 @@ class KidsTestDistributeView(KidsAuthenticatedMixin, APIView):
                         reading_passage=new_rp,
                     )
                 created_ids.append(cloned.id)
+
         rows = (
             KidsTest.objects.filter(id__in=created_ids)
             .select_related("kids_class", "created_by")
@@ -433,7 +559,17 @@ class KidsTestDistributeView(KidsAuthenticatedMixin, APIView):
             )
             .order_by("-created_at")
         )
+
+        if source_notify_id:
+
+            def _notify_home(tid: int, sender_user):
+                _notify_students_new_test(tid, sender_user)
+
+            transaction.on_commit(
+                lambda tid=source_notify_id, su=request.user: _notify_home(tid, su)
+            )
         if created_ids:
+
             def _notify_created_tests(ids: list[int], sender_user) -> None:
                 for created_test_id in ids:
                     _notify_students_new_test(created_test_id, sender_user)
@@ -446,6 +582,7 @@ class KidsTestDistributeView(KidsAuthenticatedMixin, APIView):
                 "created": KidsTestSerializer(rows, many=True, context={"request": request}).data,
                 "created_count": len(created_ids),
                 "skipped_class_ids": skipped_class_ids,
+                "home_class_assigned": home_class_assigned,
             }
         )
 
@@ -454,10 +591,14 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, test_id):
-        qs = KidsTest.objects.select_related("kids_class", "created_by").prefetch_related(
-            Prefetch("questions", queryset=_questions_prefetch_queryset()),
-            "source_images",
-            "reading_passages",
+        qs = (
+            KidsTest.objects.select_related("kids_class", "created_by")
+            .prefetch_related(
+                Prefetch("questions", queryset=_questions_prefetch_queryset()),
+                "source_images",
+                "reading_passages",
+            )
+            .annotate(_attempt_count=Count("attempts", distinct=True))
         )
         row = qs.filter(pk=test_id).first()
         if not row:
@@ -514,15 +655,34 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                     "attempt": KidsTestAttemptSerializer(attempt).data if attempt else None,
                 }
             )
-        if not _teacher_class_queryset(request.user).filter(pk=row.kids_class_id).exists():
+        if not _teacher_can_access_test(request.user, row):
             return Response(status=status.HTTP_404_NOT_FOUND)
         return Response(KidsTestSerializer(row, context={"request": request}).data)
+
+    def delete(self, request, test_id):
+        if is_kids_student_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        row = KidsTest.objects.filter(pk=test_id).first()
+        if not row:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        if not _teacher_can_access_test(request.user, row):
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        if KidsTestAttempt.objects.filter(test=row).exists():
+            return Response(
+                {
+                    "detail": "Bu teste ait öğrenci denemesi olduğu için silinemez.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        with transaction.atomic():
+            row.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def patch(self, request, test_id):
         row = KidsTest.objects.filter(pk=test_id).first()
         if not row:
             return Response(status=status.HTTP_404_NOT_FOUND)
-        if not _teacher_class_queryset(request.user).filter(pk=row.kids_class_id).exists():
+        if not _teacher_can_access_test(request.user, row):
             return Response(status=status.HTTP_404_NOT_FOUND)
         payload = request.data
         with transaction.atomic():

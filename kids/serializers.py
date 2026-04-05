@@ -9,6 +9,7 @@ from .auth_utils import is_kids_teacher_or_admin_user, is_main_user
 from .school_access import schools_queryset_for_main_user
 from .class_names import normalize_kids_class_name
 from .models import (
+    ChallengeCardTheme,
     KidsAnnouncement,
     KidsAnnouncementAttachment,
     KidsAssignment,
@@ -850,6 +851,7 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
             "require_image",
             "require_video",
             "submission_rounds",
+            "challenge_card_theme",
             "submission_opens_at",
             "submission_closes_at",
             "is_published",
@@ -1004,6 +1006,14 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
     def validate_submission_rounds(self, value):
         if value < 1 or value > 5:
             raise serializers.ValidationError("Proje sayısı 1 ile 5 arasında olmalıdır.")
+        return value
+
+    def validate_challenge_card_theme(self, value):
+        if value in (None, ""):
+            return None
+        allowed = {c.value for c in ChallengeCardTheme}
+        if value not in allowed:
+            raise serializers.ValidationError("Geçersiz kart teması.")
         return value
 
 

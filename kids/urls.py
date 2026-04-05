@@ -196,6 +196,7 @@ urlpatterns = [
     ),
     path("student/badges/roadmap/", views.KidsStudentRoadmapView.as_view()),
     path("tests/extract/", test_views.KidsTestExtractView.as_view()),
+    path("tests/create/", test_views.KidsTestStandaloneCreateView.as_view()),
     path("tests/mine/", test_views.KidsMyCreatedTestListView.as_view()),
     path("tests/<int:test_id>/distribute/", test_views.KidsTestDistributeView.as_view()),
     path("classes/<int:class_id>/tests/", test_views.KidsClassTestListCreateView.as_view()),
