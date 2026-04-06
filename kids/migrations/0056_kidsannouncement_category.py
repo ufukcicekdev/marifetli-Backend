@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("kids", "0055_kidstest_kids_class_nullable"),
+        ("kids", "0054_kidsassignment_challenge_card_theme"),
     ]
 
     operations = [
