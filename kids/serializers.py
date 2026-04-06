@@ -50,7 +50,7 @@ from .notifications_service import kids_notification_relative_path
 
 
 def kids_user_growth_stage(obj: KidsUser) -> dict | None:
-    """Öğrenci paneli: puan düşmez; yalnızca olumlu katkı gösterilir."""
+    """Öğrenci paneli: puan düşmez; rozet eşikleriyle uyumlu bantlar (6 / 16 / 30 / 50 / 80 GP)."""
     if obj.role != KidsUserRole.STUDENT:
         return None
     p = int(obj.growth_points or 0)
@@ -63,19 +63,37 @@ def kids_user_growth_stage(obj: KidsUser) -> dict | None:
     if p < 6:
         return {
             "code": "sprout",
-            "title": "Filiz",
+            "title": "Çimlenen",
             "subtitle": "Küçük adımlar büyük yolu oluşturur.",
         }
     if p < 16:
         return {
+            "code": "filiz",
+            "title": "Filiz",
+            "subtitle": "Filiz rozetini kazandın; gelişmeye devam.",
+        }
+    if p < 30:
+        return {
             "code": "growing",
             "title": "Gelişen",
-            "subtitle": "Emeğin görünüyor; böyle devam.",
+            "subtitle": "Gelişen rozetindesin; Parlayan için puan biriktir.",
+        }
+    if p < 50:
+        return {
+            "code": "radiant",
+            "title": "Parlayan",
+            "subtitle": "Parlayan seviyesindesin; yükselmeye devam.",
+        }
+    if p < 80:
+        return {
+            "code": "stellar",
+            "title": "Yükselen yıldız",
+            "subtitle": "50+ puan; yol haritasında yeni hedefler seni bekliyor.",
         }
     return {
-        "code": "radiant",
-        "title": "Parlayan",
-        "subtitle": "Harika bir yol kat ettin.",
+        "code": "legend",
+        "title": "Efsane yolcu",
+        "subtitle": "İnanılmaz bir bağlılık; böyle sürdür.",
     }
 
 

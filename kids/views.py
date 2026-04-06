@@ -24,11 +24,14 @@ from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .badges import (
+    FREESTYLE_POST_CREATE_GP,
+    HOMEWORK_FIRST_MARK_DONE_GP,
     MAX_TEACHER_PICKS_PER_ASSIGNMENT,
+    add_student_growth_points,
     apply_teacher_pick,
     build_student_roadmap,
-    sync_growth_milestone_badges,
-    try_award_badge,
+    ensure_first_submit_badge,
+    sync_all_milestone_badges,
     try_award_first_submit_badge,
 )
 from .auth_utils import (
@@ -227,6 +230,9 @@ def _send_kids_teacher_welcome_email(
 
 
 def _kids_user_payload(user: KidsUser, request) -> dict:
+    if user.role == KidsUserRole.STUDENT:
+        ensure_first_submit_badge(user.id)
+        sync_all_milestone_badges(user.id)
     data = KidsUserSerializer(user, context={"request": request}).data
     effective_language = _student_effective_language(user)
     data["preferred_language"] = None
@@ -325,6 +331,8 @@ def _teacher_can_access_class(user, class_id: int) -> bool:
 
 def _parent_child_overview_dict(student: KidsUser, request=None) -> dict:
     """Veli paneli: çocuğun sınıfları, rozetleri, proje ve yarışma özeti (salt okunur)."""
+    ensure_first_submit_badge(student.id)
+    sync_all_milestone_badges(student.id)
     class_ids = list(
         KidsEnrollment.objects.filter(student=student).values_list("kids_class_id", flat=True)
     )
@@ -1021,16 +1029,7 @@ def _apply_game_rewards(student: KidsUser, session: KidsGameSession) -> None:
         delta += 1
     if delta > 0:
         KidsUser.objects.filter(pk=student.id).update(growth_points=F("growth_points") + delta)
-    # Oyun tabanlı rozetler (MVP).
-    completed_count = KidsGameSession.objects.filter(
-        student=student,
-        status=KidsGameSession.SessionStatus.COMPLETED,
-    ).count()
-    if completed_count >= 1:
-        try_award_badge(student.id, "game_first_complete", "İlk oyun tamamlandı")
-    if completed_count >= 5:
-        try_award_badge(student.id, "game_five_complete", "5 oyun tamamlandı")
-    sync_growth_milestone_badges(student.id)
+    sync_all_milestone_badges(student.id)
 
 
 def _daily_quest_score_target(difficulty: str) -> int:
@@ -3097,6 +3096,7 @@ class KidsStudentHomeworkSubmissionMarkDoneView(KidsAuthenticatedMixin, APIView)
             )
         ser = KidsHomeworkStudentMarkDoneSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
+        first_student_mark = sub.student_done_at is None
         sub.status = KidsHomeworkSubmission.Status.STUDENT_DONE
         sub.student_done_at = timezone.now()
         sub.student_note = (ser.validated_data.get("note") or "").strip()
@@ -3122,7 +3122,19 @@ class KidsStudentHomeworkSubmissionMarkDoneView(KidsAuthenticatedMixin, APIView)
         )
         sid = sub.pk
         transaction.on_commit(lambda s=sid: notify_parent_homework_review_required(s))
-        return Response(KidsHomeworkSubmissionSerializer(sub, context={"request": request}).data)
+        gp_before = int(request.user.growth_points or 0)
+        if first_student_mark:
+            add_student_growth_points(request.user.id, HOMEWORK_FIRST_MARK_DONE_GP)
+            sync_all_milestone_badges(request.user.id)
+        request.user.refresh_from_db(fields=["growth_points"])
+        gp_after = int(request.user.growth_points or 0)
+        payload = KidsHomeworkSubmissionSerializer(sub, context={"request": request}).data
+        if not isinstance(payload, dict):
+            payload = dict(payload)
+        payload["growth_points_before"] = gp_before
+        payload["growth_points_after"] = gp_after
+        payload["growth_points_delta"] = gp_after - gp_before
+        return Response(payload)
 
 
 class KidsStudentHomeworkSubmissionAttachmentUploadView(KidsAuthenticatedMixin, APIView):
@@ -3895,7 +3907,7 @@ class KidsSubmissionCreateView(KidsAuthenticatedMixin, APIView):
         sid = sub.pk
         transaction.on_commit(lambda: notify_teacher_submission_received(sid))
         try_award_first_submit_badge(request.user.id)
-        sync_growth_milestone_badges(request.user.id)
+        sync_all_milestone_badges(request.user.id)
         return Response(
             KidsSubmissionSerializer(sub).data,
             status=status.HTTP_201_CREATED,
@@ -4025,7 +4037,7 @@ class KidsSubmissionReviewView(KidsAuthenticatedMixin, APIView):
                     )
         locked.refresh_from_db()
         if locked.student.role == KidsUserRole.STUDENT:
-            sync_growth_milestone_badges(locked.student_id)
+            sync_all_milestone_badges(locked.student_id)
         return Response(
             KidsTeacherSubmissionSerializer(
                 locked, context={"request": request}
@@ -4110,6 +4122,8 @@ class KidsFreestyleListCreateView(KidsAuthenticatedMixin, APIView):
             description=ser.validated_data.get("description") or "",
             media_urls=ser.validated_data.get("media_urls") or [],
         )
+        add_student_growth_points(request.user.id, FREESTYLE_POST_CREATE_GP)
+        sync_all_milestone_badges(request.user.id)
         return Response(KidsFreestylePostSerializer(post).data, status=status.HTTP_201_CREATED)
 
 

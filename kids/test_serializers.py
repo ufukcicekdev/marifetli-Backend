@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from .badges import TEST_FIRST_SUBMIT_GP
 from .models import (
     KidsTest,
     KidsTestAnswer,
@@ -211,6 +212,9 @@ class KidsTestSerializer(serializers.ModelSerializer):
 class KidsStudentTestListSerializer(serializers.ModelSerializer):
     question_count = serializers.SerializerMethodField()
     attempt_status = serializers.SerializerMethodField()
+    attempt_duration_minutes = serializers.SerializerMethodField()
+    xp_earned = serializers.SerializerMethodField()
+    attempt_score = serializers.SerializerMethodField()
 
     class Meta:
         model = KidsTest
@@ -223,6 +227,9 @@ class KidsStudentTestListSerializer(serializers.ModelSerializer):
             "published_at",
             "question_count",
             "attempt_status",
+            "attempt_duration_minutes",
+            "xp_earned",
+            "attempt_score",
         )
 
     def get_question_count(self, obj):
@@ -235,6 +242,35 @@ class KidsStudentTestListSerializer(serializers.ModelSerializer):
         if getattr(obj, "_has_attempt", False):
             return "in_progress"
         return "pending"
+
+    def get_attempt_duration_minutes(self, obj):
+        """Teslim edilmiş deneme: başlangıç–bitiş süresi (dakika, en az 1)."""
+        if not getattr(obj, "_is_submitted", False):
+            return None
+        start = getattr(obj, "_attempt_started_at", None)
+        end = getattr(obj, "_attempt_submitted_at", None)
+        if not start or not end:
+            return None
+        secs = (end - start).total_seconds()
+        return max(1, int(round(secs / 60.0)))
+
+    def get_xp_earned(self, obj):
+        """İlk teslimde verilen büyüme puanı (sabit; badges.TEST_FIRST_SUBMIT_GP)."""
+        if not getattr(obj, "_is_submitted", False):
+            return None
+        return int(TEST_FIRST_SUBMIT_GP)
+
+    def get_attempt_score(self, obj):
+        """Teslim sonrası yüz üzerinden puan."""
+        if not getattr(obj, "_is_submitted", False):
+            return None
+        raw = getattr(obj, "_attempt_score", None)
+        if raw is None:
+            return None
+        try:
+            return int(round(float(raw)))
+        except (TypeError, ValueError):
+            return None
 
 
 class KidsStudentTestSubmitSerializer(serializers.Serializer):

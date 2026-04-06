@@ -31,6 +31,7 @@ from .models import (
     KidsUser,
     KidsUserRole,
 )
+from .badges import on_challenge_member_created
 from .auth_utils import is_kids_student_user
 from .notifications_service import create_kids_notification
 from core.i18n_catalog import translate
@@ -490,11 +491,12 @@ class KidsStudentChallengeInviteRespondView(KidsAuthenticatedMixin, APIView):
             inv.status = KidsChallengeInvite.InviteStatus.ACCEPTED
             inv.responded_at = now
             inv.save(update_fields=["status", "responded_at"])
-            KidsChallengeMember.objects.get_or_create(
+            _, chm_created = KidsChallengeMember.objects.get_or_create(
                 challenge=ch,
                 student=request.user,
                 defaults={"is_initiator": False},
             )
+            on_challenge_member_created(request.user.id, chm_created)
         ch = KidsChallenge.objects.select_related("kids_class").prefetch_related("members__student").get(pk=ch.pk)
         return Response(KidsChallengeReadSerializer(ch, context={"request": request}).data)
 
@@ -575,11 +577,12 @@ class KidsTeacherChallengeListView(KidsAuthenticatedMixin, APIView):
                 if not stu:
                     continue
                 clear_student_peer_active_memberships_except(stu.pk, kc.pk, ch.pk)
-                KidsChallengeMember.objects.get_or_create(
+                _, chm_created = KidsChallengeMember.objects.get_or_create(
                     challenge=ch,
                     student=stu,
                     defaults={"is_initiator": False},
                 )
+                on_challenge_member_created(stu.pk, chm_created)
         ch = KidsChallenge.objects.select_related("kids_class").prefetch_related("members__student").get(pk=ch.pk)
         return Response(
             KidsChallengeReadSerializer(ch, context={"request": request}).data,
@@ -649,11 +652,12 @@ class KidsTeacherChallengeReviewView(KidsAuthenticatedMixin, APIView):
                 ch.save(
                     update_fields=["status", "reviewed_at", "reviewed_by", "activated_at", "updated_at"]
                 )
-                KidsChallengeMember.objects.get_or_create(
+                _, chm_created = KidsChallengeMember.objects.get_or_create(
                     challenge=ch,
                     student=initiator,
                     defaults={"is_initiator": True},
                 )
+                on_challenge_member_created(initiator.pk, chm_created)
             _lang = language_for_kids_student(initiator)
             msg = translate(_lang, "kids.notif.challenge_approved_student", title=ch.title)
             try:
@@ -810,11 +814,12 @@ class KidsParentFreeChallengeReviewView(KidsAuthenticatedMixin, APIView):
                 ch.save(
                     update_fields=["status", "reviewed_at", "reviewed_by", "activated_at", "updated_at"]
                 )
-                KidsChallengeMember.objects.get_or_create(
+                _, chm_created = KidsChallengeMember.objects.get_or_create(
                     challenge=ch,
                     student=initiator,
                     defaults={"is_initiator": True},
                 )
+                on_challenge_member_created(initiator.pk, chm_created)
             _lang = language_for_kids_student(initiator)
             msg = translate(_lang, "kids.notif.challenge_approved_free", title=ch.title)
             try:

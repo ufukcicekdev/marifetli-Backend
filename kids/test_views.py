@@ -9,7 +9,7 @@ import os
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import Count, Exists, OuterRef, Prefetch, Q
+from django.db.models import Count, Exists, OuterRef, Prefetch, Q, Subquery
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -21,6 +21,7 @@ from emails.services import EmailService
 from core.i18n_catalog import translate
 from core.i18n_resolve import language_for_kids_recipient, language_from_user
 
+from .badges import TEST_FIRST_SUBMIT_GP, add_student_growth_points, sync_all_milestone_badges
 from .auth_utils import is_kids_admin_user, is_kids_student_user, is_kids_teacher_or_admin_user, is_main_user
 from .authentication import KidsJWTAuthentication
 from .models import (
@@ -766,12 +767,29 @@ class KidsStudentTestListView(KidsAuthenticatedMixin, APIView):
         attempt_submitted = KidsTestAttempt.objects.filter(
             test_id=OuterRef("pk"), student_id=sid, submitted_at__isnull=False
         )
+        def _student_submitted_attempt_subq(field: str):
+            return Subquery(
+                KidsTestAttempt.objects.filter(
+                    test_id=OuterRef("pk"),
+                    student_id=sid,
+                    submitted_at__isnull=False,
+                )
+                .order_by("-submitted_at")
+                .values(field)[:1]
+            )
+
+        _attempt_started_at_sq = _student_submitted_attempt_subq("started_at")
+        _attempt_submitted_at_sq = _student_submitted_attempt_subq("submitted_at")
+        _attempt_score_sq = _student_submitted_attempt_subq("score")
         tests = (
             _student_test_queryset(request.user)
             .annotate(question_count=Count("questions"))
             .annotate(
                 _has_attempt=Exists(attempt_for_student),
                 _is_submitted=Exists(attempt_submitted),
+                _attempt_started_at=_attempt_started_at_sq,
+                _attempt_submitted_at=_attempt_submitted_at_sq,
+                _attempt_score=_attempt_score_sq,
             )
             .order_by("-published_at", "-created_at")
         )
@@ -864,6 +882,8 @@ class KidsStudentTestSubmitView(KidsAuthenticatedMixin, APIView):
                     "updated_at",
                 ]
             )
+        add_student_growth_points(request.user.id, TEST_FIRST_SUBMIT_GP)
+        sync_all_milestone_badges(request.user.id)
         return Response(KidsTestAttemptSerializer(attempt).data)
 
 
