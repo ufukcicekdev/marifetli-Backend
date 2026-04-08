@@ -130,6 +130,29 @@ urlpatterns = [
         "classes/<int:class_id>/homeworks/<int:homework_id>/attachments/<int:attachment_id>/",
         views.KidsHomeworkAttachmentDetailView.as_view(),
     ),
+    path("teacher/documents/distribute/", views.KidsTeacherDocumentsDistributeView.as_view()),
+    path("teacher/documents/recent/", views.KidsTeacherDocumentsRecentView.as_view()),
+    path(
+        "teacher/documents/folder-overview/",
+        views.KidsTeacherDocumentFoldersOverviewView.as_view(),
+    ),
+    path(
+        "classes/<int:class_id>/document-folders/",
+        views.KidsClassDocumentFolderListCreateView.as_view(),
+    ),
+    path(
+        "classes/<int:class_id>/document-folders/browse/",
+        views.KidsClassDocumentFolderBrowseView.as_view(),
+    ),
+    path(
+        "classes/<int:class_id>/document-folders/<int:folder_id>/",
+        views.KidsClassDocumentFolderDetailView.as_view(),
+    ),
+    path("classes/<int:class_id>/documents/", views.KidsClassDocumentListView.as_view()),
+    path(
+        "classes/<int:class_id>/documents/<int:document_id>/",
+        views.KidsClassDocumentDetailView.as_view(),
+    ),
     path(
         "classes/<int:class_id>/homeworks/<int:homework_id>/submissions/",
         views.KidsHomeworkSubmissionsByHomeworkView.as_view(),
@@ -178,6 +201,7 @@ urlpatterns = [
     path("student/game-sessions/me/", views.KidsStudentGameSessionListView.as_view()),
     path("student/submissions/", views.KidsSubmissionCreateView.as_view()),
     path("student/homeworks/", views.KidsStudentHomeworkListView.as_view()),
+    path("student/documents/", views.KidsStudentDocumentsListView.as_view()),
     path(
         "student/homework-submissions/<int:submission_id>/mark-done/",
         views.KidsStudentHomeworkSubmissionMarkDoneView.as_view(),

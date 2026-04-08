@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import secrets
@@ -10,9 +11,10 @@ from zoneinfo import ZoneInfo
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
+from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import transaction
-from django.db.models import Count, F, IntegerField, Max, OuterRef, Q, Subquery
+from django.db.models import Count, F, IntegerField, Max, OuterRef, Q, Subquery, Sum
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 from emails.services import EmailService
@@ -51,6 +53,8 @@ from .models import (
     KidsAssignment,
     KidsChallengeMember,
     KidsClass,
+    KidsClassDocument,
+    KidsClassDocumentFolder,
     KidsClassTeacher,
     KidsConversation,
     KidsEnrollment,
@@ -138,6 +142,8 @@ from .serializers import (
     KidsHomeworkParentReviewSerializer,
     KidsHomeworkAttachmentUploadSerializer,
     KidsHomeworkSubmissionAttachmentUploadSerializer,
+    KidsClassDocumentPatchSerializer,
+    KidsClassDocumentSerializer,
     KidsHomeworkSerializer,
     KidsHomeworkStudentMarkDoneSerializer,
     KidsHomeworkSubmissionSerializer,
@@ -154,6 +160,33 @@ from .serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+KIDS_CLASS_DOCUMENT_MAX_BYTES = 20 * 1024 * 1024
+
+
+def _validate_kids_class_document_upload(f):
+    if not f:
+        raise ValueError("Dosya gerekli.")
+    size = int(getattr(f, "size", 0) or 0)
+    if size <= 0:
+        raise ValueError("Boş dosya yüklenemez.")
+    if size > KIDS_CLASS_DOCUMENT_MAX_BYTES:
+        raise ValueError("Dosya en fazla 20 MB olabilir.")
+    ct = (getattr(f, "content_type", "") or "").strip().lower()
+    name = (getattr(f, "name", "") or "").lower()
+    allowed_ct = {
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }
+    if ct in allowed_ct:
+        return
+    if name.endswith((".pdf", ".docx", ".jpg", ".jpeg", ".png", ".webp")):
+        return
+    raise ValueError("Yalnızca PDF, DOCX veya görsel (JPEG, PNG, WebP) yüklenebilir.")
+
 
 KIDS_ALLOWED_LANGUAGES = {
     MainUser.PreferredLanguage.TR,
@@ -2886,6 +2919,449 @@ class KidsHomeworkAttachmentDetailView(KidsAuthenticatedMixin, APIView):
         att.delete()
         hw = KidsHomework.objects.prefetch_related("attachments").get(pk=hw.pk)
         return Response({"homework": KidsHomeworkSerializer(hw, context={"request": request}).data})
+
+
+def _get_or_create_folder_path_for_class(class_id: int, path_segments: list[str], user):
+    """Sınıfta üst üste get_or_create ile iç içe klasör oluşturur; son düğümü döner."""
+    parent = None
+    node = None
+    for raw in path_segments:
+        seg = (raw or "").strip()[:120]
+        if not seg:
+            continue
+        node, _ = KidsClassDocumentFolder.objects.get_or_create(
+            kids_class_id=class_id,
+            parent=parent,
+            name=seg,
+            defaults={"created_by": user},
+        )
+        parent = node
+    return node
+
+
+def _folder_breadcrumb_rows(current: KidsClassDocumentFolder | None) -> list[dict]:
+    if not current:
+        return [{"id": None, "name": ""}]
+    parts: list[dict] = []
+    w = current
+    while w:
+        parts.append({"id": w.id, "name": w.name})
+        w = w.parent
+    parts.reverse()
+    return [{"id": None, "name": ""}, *parts]
+
+
+def _delete_kids_document_folder_tree(folder: KidsClassDocumentFolder) -> None:
+    """Alt klasörler ve bu klasördeki dökümanları (depodaki dosya dahil) siler; transaction içinde çağrılmalı."""
+    for child in list(folder.subfolders.order_by("-id")):
+        _delete_kids_document_folder_tree(child)
+    for doc in list(KidsClassDocument.objects.filter(folder=folder).order_by("-id")):
+        if doc.file:
+            doc.file.delete(save=False)
+        doc.delete()
+    folder.delete()
+
+
+class KidsTeacherDocumentsDistributeView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def post(self, request):
+        title = (request.data.get("title") or "").strip()
+        description = (request.data.get("description") or "").strip()
+        if not title:
+            return Response({"detail": "Başlık zorunlu."}, status=status.HTTP_400_BAD_REQUEST)
+        raw_ids = request.data.get("class_ids")
+        if isinstance(raw_ids, str):
+            try:
+                class_ids = json.loads(raw_ids)
+            except json.JSONDecodeError:
+                class_ids = []
+        elif isinstance(raw_ids, list):
+            class_ids = raw_ids
+        else:
+            class_ids = request.data.getlist("class_ids")
+        class_ids_int: list[int] = []
+        for x in class_ids:
+            try:
+                class_ids_int.append(int(x))
+            except (TypeError, ValueError):
+                continue
+        class_ids_int = list(dict.fromkeys(class_ids_int))
+        if not class_ids_int:
+            return Response({"detail": "En az bir sınıf seçin."}, status=status.HTTP_400_BAD_REQUEST)
+        folder_path_raw = (request.data.get("folder_path") or request.data.get("folder_name") or "").strip()
+        path_segments = [s.strip() for s in folder_path_raw.replace("\\", "/").split("/") if s.strip()]
+        f = request.FILES.get("file")
+        try:
+            _validate_kids_class_document_upload(f)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        allowed = set(_teacher_class_queryset(request.user).values_list("id", flat=True))
+        for cid in class_ids_int:
+            if cid not in allowed:
+                return Response(
+                    {"detail": "Seçilen sınıflardan birine erişiminiz yok."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+        raw_bytes = f.read()
+        base_name = (getattr(f, "name", "") or "dokuman").split("/")[-1][:255]
+        ct = (getattr(f, "content_type", "") or "")[:120]
+        size = len(raw_bytes)
+        created_ids: list[int] = []
+        with transaction.atomic():
+            for cid in class_ids_int:
+                folder = None
+                if path_segments:
+                    folder = _get_or_create_folder_path_for_class(cid, path_segments, request.user)
+                doc = KidsClassDocument(
+                    kids_class_id=cid,
+                    folder=folder,
+                    title=title[:300],
+                    description=description,
+                    original_name=base_name[:255],
+                    content_type=ct,
+                    size_bytes=size,
+                    created_by=request.user,
+                )
+                doc.file.save(base_name, ContentFile(raw_bytes), save=True)
+                created_ids.append(doc.pk)
+        qs = (
+            KidsClassDocument.objects.filter(pk__in=created_ids)
+            .select_related("kids_class", "folder")
+            .order_by("-created_at", "-id")
+        )
+        return Response(
+            KidsClassDocumentSerializer(qs, many=True, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class KidsTeacherDocumentsRecentView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def get(self, request):
+        try:
+            limit = min(100, max(1, int(request.query_params.get("limit", 30))))
+        except (TypeError, ValueError):
+            limit = 30
+        allowed = list(_teacher_class_queryset(request.user).values_list("id", flat=True))
+        qs = (
+            KidsClassDocument.objects.filter(kids_class_id__in=allowed)
+            .select_related(
+                "kids_class",
+                "folder",
+                "folder__parent",
+                "folder__parent__parent",
+                "folder__parent__parent__parent",
+                "folder__parent__parent__parent__parent",
+                "folder__parent__parent__parent__parent__parent",
+            )
+            .order_by("-created_at", "-id")[:limit]
+        )
+        return Response(KidsClassDocumentSerializer(qs, many=True, context={"request": request}).data)
+
+
+class KidsTeacherDocumentFoldersOverviewView(KidsAuthenticatedMixin, APIView):
+    """Öğretmenin sınıflarındaki döküman klasörleri: isme göre toplu kartlar + sınıf bazlı düz liste."""
+
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def get(self, request):
+        allowed = list(_teacher_class_queryset(request.user).values_list("id", flat=True))
+        if not allowed:
+            return Response({"grouped": [], "flat": []})
+        base_qs = (
+            KidsClassDocumentFolder.objects.filter(kids_class_id__in=allowed)
+            .select_related("kids_class")
+            .annotate(
+                document_count=Count("documents", distinct=True),
+                total_size_bytes=Coalesce(Sum("documents__size_bytes"), 0),
+            )
+            .order_by("kids_class__name", "name", "id")
+        )
+        all_rows = list(base_qs)
+        flat = [
+            {
+                "id": f.id,
+                "kids_class_id": f.kids_class_id,
+                "parent_id": f.parent_id,
+                "class_name": f.kids_class.name if f.kids_class else "",
+                "name": f.name,
+                "document_count": f.document_count,
+                "total_size_bytes": int(f.total_size_bytes or 0),
+            }
+            for f in all_rows
+        ]
+        root_folders = [f for f in all_rows if f.parent_id is None]
+        by_name: dict[str, dict] = {}
+        for f in root_folders:
+            name = f.name
+            cn = f.kids_class.name if f.kids_class else ""
+            if name not in by_name:
+                by_name[name] = {
+                    "name": name,
+                    "document_count": 0,
+                    "total_size_bytes": 0,
+                    "class_names": [],
+                }
+            b = by_name[name]
+            b["document_count"] += f.document_count
+            b["total_size_bytes"] += int(f.total_size_bytes or 0)
+            if cn and cn not in b["class_names"]:
+                b["class_names"].append(cn)
+        grouped = list(by_name.values())
+        for g in grouped:
+            g["class_names"] = sorted(g["class_names"], key=lambda x: (x or "").lower())
+        grouped.sort(key=lambda x: (-x["document_count"], x["name"].lower()))
+        return Response({"grouped": grouped, "flat": flat})
+
+
+class KidsClassDocumentFolderListCreateView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def get(self, request, class_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        qs = (
+            KidsClassDocumentFolder.objects.filter(kids_class_id=class_id)
+            .annotate(
+                document_count=Count("documents", distinct=True),
+                subfolder_count=Count("subfolders", distinct=True),
+            )
+            .order_by("name", "id")
+        )
+        return Response(
+            [
+                {
+                    "id": f.id,
+                    "parent_id": f.parent_id,
+                    "name": f.name,
+                    "document_count": f.document_count,
+                    "subfolder_count": f.subfolder_count,
+                }
+                for f in qs
+            ]
+        )
+
+    def post(self, request, class_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        name = (request.data.get("name") or "").strip()
+        if not name:
+            return Response({"detail": "Klasör adı zorunlu."}, status=status.HTTP_400_BAD_REQUEST)
+        parent = None
+        raw_parent = request.data.get("parent_id")
+        if raw_parent is not None and raw_parent != "":
+            try:
+                pid = int(raw_parent)
+            except (TypeError, ValueError):
+                return Response({"detail": "Geçersiz üst klasör."}, status=status.HTTP_400_BAD_REQUEST)
+            parent = KidsClassDocumentFolder.objects.filter(pk=pid, kids_class_id=class_id).first()
+            if not parent:
+                return Response({"detail": "Üst klasör bulunamadı."}, status=status.HTTP_404_NOT_FOUND)
+        folder, created = KidsClassDocumentFolder.objects.get_or_create(
+            kids_class_id=class_id,
+            parent=parent,
+            name=name[:120],
+            defaults={"created_by": request.user},
+        )
+        cnt = folder.documents.count()
+        sf = folder.subfolders.count()
+        return Response(
+            {
+                "id": folder.id,
+                "parent_id": folder.parent_id,
+                "name": folder.name,
+                "document_count": cnt,
+                "subfolder_count": sf,
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class KidsClassDocumentFolderBrowseView(KidsAuthenticatedMixin, APIView):
+    """Seçili sınıfta bir klasörün içi: alt klasörler + doğrudan dökümanlar (kökta folder=null)."""
+
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def get(self, request, class_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        raw_fid = request.query_params.get("folder_id")
+        current = None
+        if raw_fid not in (None, ""):
+            try:
+                fid = int(raw_fid)
+            except (TypeError, ValueError):
+                return Response({"detail": "Geçersiz klasör."}, status=status.HTTP_400_BAD_REQUEST)
+            current = KidsClassDocumentFolder.objects.filter(pk=fid, kids_class_id=class_id).first()
+            if not current:
+                return Response(status=status.HTTP_404_NOT_FOUND)
+        subfolders = (
+            KidsClassDocumentFolder.objects.filter(kids_class_id=class_id, parent=current)
+            .annotate(
+                document_count=Count("documents", distinct=True),
+                subfolder_count=Count("subfolders", distinct=True),
+            )
+            .order_by("name", "id")
+        )
+        doc_filter = {"kids_class_id": class_id, "folder": current}
+        doc_qs = (
+            KidsClassDocument.objects.filter(**doc_filter)
+            .select_related("kids_class", "folder")
+            .order_by("-created_at", "-id")
+        )
+        return Response(
+            {
+                "breadcrumbs": _folder_breadcrumb_rows(current),
+                "current_folder_id": current.id if current else None,
+                "folders": [
+                    {
+                        "id": sf.id,
+                        "name": sf.name,
+                        "document_count": sf.document_count,
+                        "subfolder_count": sf.subfolder_count,
+                    }
+                    for sf in subfolders
+                ],
+                "documents": KidsClassDocumentSerializer(
+                    doc_qs, many=True, context={"request": request}
+                ).data,
+            }
+        )
+
+
+class KidsClassDocumentFolderDetailView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def patch(self, request, class_id, folder_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        folder = KidsClassDocumentFolder.objects.filter(pk=folder_id, kids_class_id=class_id).first()
+        if not folder:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        new_name = (request.data.get("name") or "").strip()
+        if not new_name:
+            return Response({"detail": "Klasör adı zorunlu."}, status=status.HTTP_400_BAD_REQUEST)
+        dup = KidsClassDocumentFolder.objects.filter(
+            kids_class_id=class_id,
+            parent_id=folder.parent_id,
+            name=new_name[:120],
+        ).exclude(pk=folder_id)
+        if dup.exists():
+            return Response({"detail": "Bu isimde bir klasör zaten var."}, status=status.HTTP_400_BAD_REQUEST)
+        folder.name = new_name[:120]
+        folder.save(update_fields=["name", "updated_at"])
+        cnt = folder.documents.count()
+        sf = folder.subfolders.count()
+        return Response(
+            {
+                "id": folder.id,
+                "parent_id": folder.parent_id,
+                "name": folder.name,
+                "document_count": cnt,
+                "subfolder_count": sf,
+            }
+        )
+
+    def delete(self, request, class_id, folder_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        folder = KidsClassDocumentFolder.objects.filter(pk=folder_id, kids_class_id=class_id).first()
+        if not folder:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        cascade = str(request.query_params.get("cascade") or "").lower() in ("1", "true", "yes")
+        if cascade:
+            with transaction.atomic():
+                _delete_kids_document_folder_tree(folder)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        if folder.documents.exists():
+            return Response(
+                {"detail": "Önce klasördeki dökümanları taşıyın veya silin."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if folder.subfolders.exists():
+            return Response(
+                {"detail": "Önce alt klasörleri silin veya taşıyın."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        folder.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class KidsClassDocumentListView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def get(self, request, class_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        qs = (
+            KidsClassDocument.objects.filter(kids_class_id=class_id)
+            .select_related("kids_class", "folder")
+            .order_by("-created_at", "-id")
+        )
+        return Response(KidsClassDocumentSerializer(qs, many=True, context={"request": request}).data)
+
+
+class KidsClassDocumentDetailView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated, IsKidsTeacherOrAdmin]
+
+    def patch(self, request, class_id, document_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        doc = KidsClassDocument.objects.filter(pk=document_id, kids_class_id=class_id).first()
+        if not doc:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        ser = KidsClassDocumentPatchSerializer(
+            doc, data=request.data, partial=True, context={"request": request}
+        )
+        ser.is_valid(raise_exception=True)
+        ser.save()
+        doc = KidsClassDocument.objects.select_related("kids_class", "folder").get(pk=doc.pk)
+        return Response(KidsClassDocumentSerializer(doc, context={"request": request}).data)
+
+    def delete(self, request, class_id, document_id):
+        kids_class = _teacher_class_queryset(request.user).filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        doc = KidsClassDocument.objects.filter(pk=document_id, kids_class_id=class_id).first()
+        if not doc:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        doc.file.delete(save=False)
+        doc.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class KidsStudentDocumentsListView(KidsAuthenticatedMixin, APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not is_kids_student_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        class_ids = list(
+            KidsEnrollment.objects.filter(student=request.user).values_list("kids_class_id", flat=True)
+        )
+        qs = (
+            KidsClassDocument.objects.filter(kids_class_id__in=class_ids)
+            .select_related(
+                "kids_class",
+                "folder",
+                "folder__parent",
+                "folder__parent__parent",
+                "folder__parent__parent__parent",
+                "folder__parent__parent__parent__parent",
+                "folder__parent__parent__parent__parent__parent",
+            )
+            .order_by(F("folder__name").asc(nulls_last=True), "-created_at", "-id")
+        )
+        return Response(KidsClassDocumentSerializer(qs, many=True, context={"request": request}).data)
 
 
 class KidsHomeworkSubmissionsByHomeworkView(KidsAuthenticatedMixin, APIView):

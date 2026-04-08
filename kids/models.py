@@ -891,6 +891,83 @@ class KidsHomeworkSubmissionAttachment(models.Model):
         ordering = ["created_at", "id"]
 
 
+class KidsClassDocumentFolder(models.Model):
+    """Sınıf içi ders dökümanı klasörü; kökte (parent yok) isim benzersiz, alt klasörde (parent+isim) benzersiz."""
+
+    kids_class = models.ForeignKey(
+        KidsClass,
+        on_delete=models.CASCADE,
+        related_name="document_folders",
+    )
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="subfolders",
+    )
+    name = models.CharField(max_length=120)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="kids_class_document_folders_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_class_document_folders"
+        ordering = ["name", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("kids_class", "name"),
+                condition=models.Q(parent__isnull=True),
+                name="kids_doc_folder_root_name_uniq",
+            ),
+            models.UniqueConstraint(
+                fields=("kids_class", "parent", "name"),
+                condition=models.Q(parent__isnull=False),
+                name="kids_doc_folder_child_name_uniq",
+            ),
+        ]
+
+
+class KidsClassDocument(models.Model):
+    """Öğretmenin sınıfa dağıttığı ders dökümanı (PDF, Word, görsel). Ödev akışından bağımsız."""
+
+    kids_class = models.ForeignKey(
+        KidsClass,
+        on_delete=models.CASCADE,
+        related_name="class_documents",
+    )
+    folder = models.ForeignKey(
+        "KidsClassDocumentFolder",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="documents",
+    )
+    title = models.CharField(max_length=300)
+    description = models.TextField(blank=True)
+    file = models.FileField(upload_to="kids_class_documents/")
+    original_name = models.CharField(max_length=255, blank=True)
+    content_type = models.CharField(max_length=120, blank=True)
+    size_bytes = models.PositiveIntegerField(default=0)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="kids_class_documents_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_class_documents"
+        ordering = ["-created_at", "-id"]
+
+
 class KidsUserBadge(models.Model):
     """Öğrenci rozetleri; key örn. first_submit, growth_6, teacher_pick_42."""
 
@@ -1247,6 +1324,12 @@ class KidsTestQuestion(models.Model):
         blank=True,
         related_name="questions",
     )
+    # Soru metninin üstünde gösterilen isteğe bağlı görsel (şekil, tablo vb.).
+    illustration_image = models.ImageField(
+        upload_to="kids_tests/question_illustrations/",
+        blank=True,
+        null=True,
+    )
     # İleride bbox, OCR güveni vb. için genişletilebilir yapı.
     source_meta = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -1306,7 +1389,7 @@ class KidsTestAnswer(models.Model):
         on_delete=models.CASCADE,
         related_name="answers",
     )
-    selected_choice_key = models.CharField(max_length=8, blank=True)
+    selected_choice_key = models.CharField(max_length=500, blank=True)
     is_correct = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

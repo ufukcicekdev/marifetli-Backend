@@ -10,23 +10,57 @@ from .models import (
     KidsTestSourceImage,
 )
 from .serializers import _absolute_media_url
+from .test_normalize import normalize_constructed_answer
+
+
+MAX_TEST_EXTRACT_SOURCE_PAGES = 10
+_MAX_TEST_EXTRACT_PDF_BYTES = 30 * 1024 * 1024
 
 
 class KidsTestExtractSerializer(serializers.Serializer):
     images = serializers.ListField(
         child=serializers.ImageField(),
-        allow_empty=False,
-        max_length=10,
+        allow_empty=True,
+        max_length=MAX_TEST_EXTRACT_SOURCE_PAGES,
+        required=False,
+        default=list,
     )
+    pdf = serializers.FileField(required=False, allow_null=True)
 
-    def validate_images(self, value):
-        for img in value:
+    def validate(self, attrs):
+        images = list(attrs.get("images") or [])
+        pdf = attrs.get("pdf")
+        if not images and pdf is None:
+            raise serializers.ValidationError(
+                "En az bir görsel veya bir PDF dosyası gerekli."
+            )
+        if len(images) > MAX_TEST_EXTRACT_SOURCE_PAGES:
+            raise serializers.ValidationError(
+                {"images": f"En fazla {MAX_TEST_EXTRACT_SOURCE_PAGES} görsel gönderilebilir."}
+            )
+        for img in images:
             size = int(getattr(img, "size", 0) or 0)
             if size <= 0:
-                raise serializers.ValidationError("Boş görsel gönderilemez.")
+                raise serializers.ValidationError({"images": "Boş görsel gönderilemez."})
             if size > 12 * 1024 * 1024:
-                raise serializers.ValidationError("Her görsel en fazla 12 MB olabilir.")
-        return value
+                raise serializers.ValidationError(
+                    {"images": "Her görsel en fazla 12 MB olabilir."}
+                )
+        if pdf is not None:
+            if len(images) >= MAX_TEST_EXTRACT_SOURCE_PAGES:
+                raise serializers.ValidationError(
+                    {
+                        "pdf": f"Zaten {MAX_TEST_EXTRACT_SOURCE_PAGES} görsel var; PDF eklenemez."
+                    }
+                )
+            psz = int(getattr(pdf, "size", 0) or 0)
+            if psz <= 0:
+                raise serializers.ValidationError({"pdf": "Boş PDF gönderilemez."})
+            if psz > _MAX_TEST_EXTRACT_PDF_BYTES:
+                raise serializers.ValidationError(
+                    {"pdf": f"PDF en fazla {_MAX_TEST_EXTRACT_PDF_BYTES // (1024 * 1024)} MB olabilir."}
+                )
+        return attrs
 
 
 class KidsTestQuestionWriteSerializer(serializers.Serializer):
@@ -34,36 +68,65 @@ class KidsTestQuestionWriteSerializer(serializers.Serializer):
     stem = serializers.CharField(max_length=3000)
     topic = serializers.CharField(max_length=120, required=False, allow_blank=True)
     subtopic = serializers.CharField(max_length=160, required=False, allow_blank=True)
-    choices = serializers.ListField(child=serializers.DictField(), min_length=2, max_length=5)
+    question_format = serializers.ChoiceField(
+        choices=("multiple_choice", "constructed"),
+        required=False,
+        default="multiple_choice",
+    )
+    choices = serializers.ListField(child=serializers.DictField(), required=False, allow_empty=True, max_length=5)
     correct_choice_key = serializers.CharField(max_length=8, allow_blank=True)
+    constructed_answer = serializers.CharField(max_length=500, required=False, allow_blank=True)
     points = serializers.FloatField(min_value=0.1, required=False, default=1.0)
     # Kaynak görsel sayfa sırası (testteki source_images.page_order ile eşleşir).
     source_page_order = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=30)
     # Okuma metni sırası (testteki reading_passages.order ile eşleşir).
     reading_passage_order = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=50)
 
-    def validate_choices(self, value):
+    def validate(self, attrs):
+        attrs["topic"] = str(attrs.get("topic") or "").strip()[:120]
+        attrs["subtopic"] = str(attrs.get("subtopic") or "").strip()[:160]
+        fmt = str(attrs.get("question_format") or "multiple_choice").strip().lower()
+        if fmt not in ("multiple_choice", "constructed"):
+            fmt = "multiple_choice"
+        attrs["question_format"] = fmt
+
+        if fmt == "constructed":
+            raw = str(attrs.get("constructed_answer") or "").strip()
+            norm = normalize_constructed_answer(raw)
+            if not norm:
+                raise serializers.ValidationError(
+                    {"constructed_answer": "Şıksız soruda beklenen cevap (kısa metin veya sayı) gerekli."}
+                )
+            attrs["choices"] = []
+            attrs["correct_choice_key"] = ""
+            attrs["source_meta"] = {
+                "question_format": "constructed",
+                "constructed_correct": norm,
+                "constructed_answer_display": raw[:500],
+            }
+            return attrs
+
+        raw_choices = attrs.get("choices")
+        if not isinstance(raw_choices, list) or len(raw_choices) < 2 or len(raw_choices) > 5:
+            raise serializers.ValidationError({"choices": "Çoktan seçmeli soruda 2–5 şık olmalı."})
         cleaned = []
         seen = set()
-        for idx, row in enumerate(value):
+        for idx, row in enumerate(raw_choices):
             key = str(row.get("key") or chr(ord("A") + idx)).strip().upper()[:8]
             text = str(row.get("text") or "").strip()
             if not text:
-                raise serializers.ValidationError("Şık metni boş olamaz.")
+                raise serializers.ValidationError({"choices": "Şık metni boş olamaz."})
             if key in seen:
-                raise serializers.ValidationError("Şık anahtarları tekrar edemez.")
+                raise serializers.ValidationError({"choices": "Şık anahtarları tekrar edemez."})
             seen.add(key)
             cleaned.append({"key": key, "text": text[:500]})
-        return cleaned
-
-    def validate(self, attrs):
-        keys = [c["key"] for c in attrs["choices"]]
+        attrs["choices"] = cleaned
+        keys = [c["key"] for c in cleaned]
         correct_key = (attrs.get("correct_choice_key") or "").strip().upper()
         if correct_key and correct_key not in keys:
             raise serializers.ValidationError({"correct_choice_key": "Doğru şık anahtarı seçeneklerde bulunmalı."})
         attrs["correct_choice_key"] = correct_key
-        attrs["topic"] = str(attrs.get("topic") or "").strip()[:120]
-        attrs["subtopic"] = str(attrs.get("subtopic") or "").strip()[:160]
+        attrs["source_meta"] = {"question_format": "multiple_choice"}
         return attrs
 
 
@@ -119,7 +182,10 @@ class KidsTestDistributeSerializer(serializers.Serializer):
 class KidsTestQuestionSerializer(serializers.ModelSerializer):
     source_page_order = serializers.SerializerMethodField()
     source_image_url = serializers.SerializerMethodField()
+    illustration_url = serializers.SerializerMethodField()
     reading_passage_order = serializers.SerializerMethodField()
+    question_format = serializers.SerializerMethodField()
+    constructed_answer_display = serializers.SerializerMethodField()
 
     class Meta:
         model = KidsTestQuestion
@@ -135,9 +201,24 @@ class KidsTestQuestionSerializer(serializers.ModelSerializer):
             "reading_passage_order",
             "source_page_order",
             "source_image_url",
+            "illustration_url",
             "source_meta",
+            "question_format",
+            "constructed_answer_display",
         )
         read_only_fields = fields
+
+    def get_question_format(self, obj):
+        meta = obj.source_meta if isinstance(obj.source_meta, dict) else {}
+        qf = str(meta.get("question_format") or "multiple_choice").strip().lower()
+        return qf if qf in ("multiple_choice", "constructed") else "multiple_choice"
+
+    def get_constructed_answer_display(self, obj):
+        meta = obj.source_meta if isinstance(obj.source_meta, dict) else {}
+        d = meta.get("constructed_answer_display")
+        if d is not None and str(d).strip():
+            return str(d).strip()[:500]
+        return ""
 
     def get_reading_passage_order(self, obj):
         return obj.reading_passage.order if obj.reading_passage_id else None
@@ -151,6 +232,12 @@ class KidsTestQuestionSerializer(serializers.ModelSerializer):
         if not si or not getattr(si, "image", None):
             return None
         return _absolute_media_url(request, si.image.url)
+
+    def get_illustration_url(self, obj):
+        request = self.context.get("request")
+        if not getattr(obj, "illustration_image", None) or not getattr(obj.illustration_image, "url", None):
+            return None
+        return _absolute_media_url(request, obj.illustration_image.url)
 
 
 class KidsTestSourceImageSerializer(serializers.ModelSerializer):

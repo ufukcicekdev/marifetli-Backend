@@ -39,7 +39,10 @@ from .models import (
     KidsUser,
 )
 from .notifications_service import create_kids_notification
+from .pdf_pages import PngBytesFile, pdf_bytes_to_png_list
+from .test_normalize import normalize_constructed_answer
 from .test_serializers import (
+    MAX_TEST_EXTRACT_SOURCE_PAGES,
     _absolute_media_url,
     KidsStudentTestListSerializer,
     KidsStudentTestSubmitSerializer,
@@ -52,8 +55,72 @@ from .test_serializers import (
 from .tests_ai import extract_test_from_images
 
 
+def _question_format_from_meta(q: KidsTestQuestion) -> str:
+    meta = q.source_meta if isinstance(getattr(q, "source_meta", None), dict) else {}
+    fmt = str(meta.get("question_format") or "multiple_choice").strip().lower()
+    return fmt if fmt in ("multiple_choice", "constructed") else "multiple_choice"
+
+
+def _constructed_expected_normalized(q: KidsTestQuestion) -> str:
+    meta = q.source_meta if isinstance(getattr(q, "source_meta", None), dict) else {}
+    return str(meta.get("constructed_correct") or "").strip()
+
+
+def _constructed_display_for_review(q: KidsTestQuestion) -> str:
+    meta = q.source_meta if isinstance(getattr(q, "source_meta", None), dict) else {}
+    d = meta.get("constructed_answer_display")
+    if d is not None and str(d).strip():
+        return str(d).strip()[:500]
+    return _constructed_expected_normalized(q)
+
+
 def _questions_prefetch_queryset():
     return KidsTestQuestion.objects.select_related("source_image", "reading_passage").order_by("order", "id")
+
+
+def _cache_question_illustration_bytes_by_order(test_row: KidsTest) -> dict[int, bytes]:
+    out: dict[int, bytes] = {}
+    for q in test_row.questions.all().order_by("order", "id"):
+        if not q.illustration_image:
+            continue
+        try:
+            with q.illustration_image.open("rb") as f:
+                out[int(q.order)] = f.read()
+        except OSError:
+            continue
+    return out
+
+
+def _illustration_file_for_question_order(
+    request,
+    order: int,
+    illustration_cache: dict[int, bytes],
+):
+    """Yeni dosya, açık silme, veya önceki kayıttan koruma (PATCH yeniden yazımı)."""
+    files = getattr(request, "FILES", None) or {}
+    key = f"question_illustration_{order}"
+    upload = files.get(key)
+    if upload:
+        return upload
+    data = getattr(request, "data", {}) or {}
+    if str(data.get(f"question_illustration_clear_{order}") or "").strip().lower() in ("1", "true", "yes", "on"):
+        return None
+    blob = illustration_cache.get(int(order))
+    if blob:
+        return ContentFile(blob, name=f"illustration_{order}.jpg")
+    return None
+
+
+def _coerce_questions_payload(raw) -> list | None:
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, list) else None
+    return None
 
 
 def _stem_for_student_view(stem: str) -> str:
@@ -225,7 +292,28 @@ class KidsTestExtractView(KidsAuthenticatedMixin, APIView):
             return Response(status=status.HTTP_403_FORBIDDEN)
         ser = KidsTestExtractSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
-        files = list(ser.validated_data["images"])
+        vd = ser.validated_data
+        images = list(vd.get("images") or [])
+        pdf = vd.get("pdf")
+        files: list = []
+        for img in images:
+            img.seek(0)
+            files.append(img)
+        if pdf is not None:
+            pdf.seek(0)
+            raw_pdf = pdf.read()
+            remaining = max(0, MAX_TEST_EXTRACT_SOURCE_PAGES - len(files))
+            try:
+                png_chunks = pdf_bytes_to_png_list(raw_pdf, max_pages=remaining)
+            except ValueError as e:
+                return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            for chunk in png_chunks:
+                files.append(PngBytesFile(chunk))
+        if not files:
+            return Response(
+                {"detail": "İşlenecek sayfa bulunamadı."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             payload = extract_test_from_images(files)
         except Exception as e:
@@ -309,6 +397,7 @@ class KidsClassTestListCreateView(KidsAuthenticatedMixin, APIView):
                 src = _attach_question_source_image(images_by_page, q.get("source_page_order"))
                 rpo = q.get("reading_passage_order")
                 rp = passage_by_order.get(int(rpo)) if rpo is not None else None
+                ill = _illustration_file_for_question_order(request, q["order"], {})
                 KidsTestQuestion.objects.create(
                     test=row,
                     order=q["order"],
@@ -320,6 +409,8 @@ class KidsClassTestListCreateView(KidsAuthenticatedMixin, APIView):
                     points=q.get("points") or 1.0,
                     source_image=src,
                     reading_passage=rp,
+                    source_meta=q.get("source_meta") or {},
+                    illustration_image=ill,
                 )
         row = (
             KidsTest.objects.select_related("kids_class", "created_by")
@@ -394,6 +485,7 @@ class KidsTestStandaloneCreateView(KidsAuthenticatedMixin, APIView):
                 src = _attach_question_source_image(images_by_page, q.get("source_page_order"))
                 rpo = q.get("reading_passage_order")
                 rp = passage_by_order.get(int(rpo)) if rpo is not None else None
+                ill = _illustration_file_for_question_order(request, q["order"], {})
                 KidsTestQuestion.objects.create(
                     test=row,
                     order=q["order"],
@@ -405,6 +497,8 @@ class KidsTestStandaloneCreateView(KidsAuthenticatedMixin, APIView):
                     points=q.get("points") or 1.0,
                     source_image=src,
                     reading_passage=rp,
+                    source_meta=q.get("source_meta") or {},
+                    illustration_image=ill,
                 )
         row = (
             KidsTest.objects.select_related("kids_class", "created_by")
@@ -535,7 +629,7 @@ class KidsTestDistributeView(KidsAuthenticatedMixin, APIView):
                     if q.source_image_id:
                         src = new_by_page.get(q.source_image.page_order)
                     new_rp = old_passage_to_new.get(q.reading_passage_id) if q.reading_passage_id else None
-                    KidsTestQuestion.objects.create(
+                    nq = KidsTestQuestion.objects.create(
                         test=cloned,
                         order=q.order,
                         stem=q.stem,
@@ -548,6 +642,16 @@ class KidsTestDistributeView(KidsAuthenticatedMixin, APIView):
                         source_meta=q.source_meta or {},
                         reading_passage=new_rp,
                     )
+                    if q.illustration_image:
+                        try:
+                            with q.illustration_image.open("rb") as f:
+                                nq.illustration_image.save(
+                                    os.path.basename(q.illustration_image.name) or f"illustration_{q.order}.jpg",
+                                    ContentFile(f.read()),
+                                    save=True,
+                                )
+                        except OSError:
+                            pass
                 created_ids.append(cloned.id)
 
         rows = (
@@ -627,6 +731,10 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                 if q.source_image_id and q.source_image and getattr(q.source_image, "image", None):
                     src_url = _absolute_media_url(request, q.source_image.image.url)
                     src_po = q.source_image.page_order
+                ill_url = None
+                if getattr(q, "illustration_image", None) and getattr(q.illustration_image, "url", None):
+                    ill_url = _absolute_media_url(request, q.illustration_image.url)
+                q_fmt = _question_format_from_meta(q)
                 q_payload: dict = {
                     "id": q.id,
                     "order": q.order,
@@ -636,13 +744,21 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                     "reading_passage_order": q.reading_passage.order if q.reading_passage_id else None,
                     "source_image_url": src_url,
                     "source_page_order": src_po,
+                    "illustration_url": ill_url,
+                    "question_format": q_fmt,
                 }
                 if attempt and attempt.submitted_at:
                     ans = answers_by_q.get(q.id)
-                    q_payload["selected_choice_key"] = (ans.selected_choice_key or "").strip().upper() if ans else ""
-                    q_payload["is_correct"] = bool(ans.is_correct) if ans else False
-                    ck = (q.correct_choice_key or "").strip().upper()
-                    q_payload["correct_choice_key"] = ck if ck else None
+                    if q_fmt == "constructed":
+                        q_payload["selected_choice_key"] = ((ans.selected_choice_key or "").strip()[:500] if ans else "")
+                        q_payload["is_correct"] = bool(ans.is_correct) if ans else False
+                        q_payload["correct_choice_key"] = None
+                        q_payload["constructed_correct_display"] = _constructed_display_for_review(q)
+                    else:
+                        q_payload["selected_choice_key"] = (ans.selected_choice_key or "").strip().upper() if ans else ""
+                        q_payload["is_correct"] = bool(ans.is_correct) if ans else False
+                        ck = (q.correct_choice_key or "").strip().upper()
+                        q_payload["correct_choice_key"] = ck if ck else None
                 questions.append(q_payload)
             return Response(
                 {
@@ -701,9 +817,20 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                     if status_val == KidsTest.Status.PUBLISHED and row.published_at is None:
                         row.published_at = timezone.now()
             row.save()
-            if "questions" in payload and isinstance(payload.get("questions"), list):
+            if "questions" in payload:
+                qlist = _coerce_questions_payload(payload.get("questions"))
+                if qlist is None:
+                    return Response(
+                        {"detail": "Sorular geçerli bir dizi (veya JSON dizi metni) olmalı."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 if "passages" in payload:
                     plist = payload.get("passages")
+                    if isinstance(plist, str):
+                        try:
+                            plist = json.loads(plist or "[]")
+                        except json.JSONDecodeError:
+                            plist = []
                     if not isinstance(plist, list):
                         plist = []
                 else:
@@ -711,6 +838,7 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                         {"order": p.order, "title": p.title, "body": p.body}
                         for p in row.reading_passages.all().order_by("order", "id")
                     ]
+                illustration_cache = _cache_question_illustration_bytes_by_order(row)
                 ser = KidsTestCreateSerializer(
                     data={
                         "title": row.title,
@@ -718,7 +846,7 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                         "duration_minutes": row.duration_minutes,
                         "status": row.status,
                         "passages": plist,
-                        "questions": payload.get("questions"),
+                        "questions": qlist,
                     }
                 )
                 ser.is_valid(raise_exception=True)
@@ -732,6 +860,7 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                     src = _attach_question_source_image(images_by_page, q.get("source_page_order"))
                     rpo = q.get("reading_passage_order")
                     rp = passage_by_order.get(int(rpo)) if rpo is not None else None
+                    ill = _illustration_file_for_question_order(request, q["order"], illustration_cache)
                     KidsTestQuestion.objects.create(
                         test=row,
                         order=q["order"],
@@ -743,6 +872,8 @@ class KidsTestDetailView(KidsAuthenticatedMixin, APIView):
                         points=q.get("points") or 1.0,
                         source_image=src,
                         reading_passage=rp,
+                        source_meta=q.get("source_meta") or {},
+                        illustration_image=ill,
                     )
         row = (
             KidsTest.objects.select_related("kids_class", "created_by")
@@ -855,14 +986,20 @@ class KidsStudentTestSubmitView(KidsAuthenticatedMixin, APIView):
         total_correct = 0
         with transaction.atomic():
             for q in question_rows:
-                selected = str(answers_map.get(str(q.id)) or "").strip().upper()[:8]
-                is_correct = bool(selected) and selected == (q.correct_choice_key or "").strip().upper()
+                raw = str(answers_map.get(str(q.id)) or "").strip()
+                if _question_format_from_meta(q) == "constructed":
+                    stored = raw[:500]
+                    expected = _constructed_expected_normalized(q)
+                    is_correct = bool(expected) and normalize_constructed_answer(raw) == expected
+                else:
+                    stored = raw.upper()[:8]
+                    is_correct = bool(stored) and stored == (q.correct_choice_key or "").strip().upper()
                 if is_correct:
                     total_correct += 1
                 KidsTestAnswer.objects.create(
                     attempt=attempt,
                     question=q,
-                    selected_choice_key=selected,
+                    selected_choice_key=stored,
                     is_correct=is_correct,
                 )
             total_questions = len(question_rows)
@@ -996,19 +1133,22 @@ class KidsClassTestStudentReportView(KidsAuthenticatedMixin, APIView):
         questions = []
         for q in test.questions.all().order_by("order", "id"):
             ans = answer_by_question_id.get(q.id)
-            questions.append(
-                {
-                    "question_id": q.id,
-                    "order": q.order,
-                    "stem": q.stem,
-                    "topic": q.topic,
-                    "subtopic": q.subtopic,
-                    "choices": q.choices,
-                    "correct_choice_key": q.correct_choice_key,
-                    "selected_choice_key": ans.selected_choice_key if ans else "",
-                    "is_correct": bool(ans.is_correct) if ans else False,
-                }
-            )
+            q_fmt = _question_format_from_meta(q)
+            row_out = {
+                "question_id": q.id,
+                "order": q.order,
+                "stem": q.stem,
+                "topic": q.topic,
+                "subtopic": q.subtopic,
+                "choices": q.choices,
+                "correct_choice_key": q.correct_choice_key,
+                "question_format": q_fmt,
+                "selected_choice_key": ans.selected_choice_key if ans else "",
+                "is_correct": bool(ans.is_correct) if ans else False,
+            }
+            if q_fmt == "constructed":
+                row_out["constructed_correct_display"] = _constructed_display_for_review(q)
+            questions.append(row_out)
 
         attempt_payload = None
         if attempt:

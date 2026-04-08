@@ -8,6 +8,7 @@ social-auth-app-django==5.7.0
 psycopg2-binary==2.9.11
 python-decouple==3.8
 Pillow==12.1.1
+PyMuPDF==1.25.3
 django-storages==1.14.4
 boto3==1.35.0
 django-filter==24.3

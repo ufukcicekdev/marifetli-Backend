@@ -17,6 +17,8 @@ from .models import (
     KidsChallengeInvite,
     KidsChallengeMember,
     KidsClass,
+    KidsClassDocument,
+    KidsClassDocumentFolder,
     KidsClassTeacher,
     KidsKindergartenClassDayPlan,
     KidsKindergartenDailyRecord,
@@ -139,6 +141,119 @@ def _absolute_media_url(request, relative_or_absolute: str) -> str:
     if request:
         return request.build_absolute_uri(relative_or_absolute)
     return relative_or_absolute
+
+
+def _class_document_file_kind(content_type: str, original_name: str) -> str:
+    ct = (content_type or "").lower()
+    name = (original_name or "").lower()
+    if "pdf" in ct or name.endswith(".pdf"):
+        return "pdf"
+    if "wordprocessingml" in ct or "msword" in ct or name.endswith(".docx"):
+        return "word"
+    if "presentationml" in ct or "powerpoint" in ct or name.endswith((".ppt", ".pptx")):
+        return "presentation"
+    if ct.startswith("image/") or name.endswith((".jpg", ".jpeg", ".png", ".webp")):
+        return "image"
+    return "file"
+
+
+class KidsClassDocumentSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+    class_name = serializers.SerializerMethodField()
+    file_kind = serializers.SerializerMethodField()
+    folder_id = serializers.IntegerField(read_only=True, allow_null=True)
+    folder_name = serializers.SerializerMethodField()
+    folder_path = serializers.SerializerMethodField()
+
+    class Meta:
+        model = KidsClassDocument
+        fields = (
+            "id",
+            "kids_class",
+            "class_name",
+            "folder_id",
+            "folder_name",
+            "folder_path",
+            "title",
+            "description",
+            "file_url",
+            "original_name",
+            "content_type",
+            "size_bytes",
+            "file_kind",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+    def get_file_url(self, obj):
+        if not getattr(obj, "file", None):
+            return ""
+        return _absolute_media_url(self.context.get("request"), obj.file.url)
+
+    def get_class_name(self, obj):
+        kc = getattr(obj, "kids_class", None)
+        return kc.name if kc else ""
+
+    def get_file_kind(self, obj):
+        return _class_document_file_kind(obj.content_type or "", obj.original_name or "")
+
+    def get_folder_name(self, obj):
+        f = getattr(obj, "folder", None)
+        return f.name if f else ""
+
+    def get_folder_path(self, obj):
+        f = getattr(obj, "folder", None)
+        if not f:
+            return ""
+        parts = []
+        while f:
+            parts.append(f.name)
+            f = f.parent
+        return " / ".join(reversed(parts))
+
+
+class KidsClassDocumentPatchSerializer(serializers.ModelSerializer):
+    folder_name = serializers.CharField(required=False, allow_blank=True, max_length=120, write_only=True)
+
+    class Meta:
+        model = KidsClassDocument
+        fields = ("title", "description", "folder_id", "folder_name")
+        extra_kwargs = {"folder_id": {"required": False, "allow_null": True}}
+
+    def validate_folder_id(self, value):
+        if value is None:
+            return None
+        doc = self.instance
+        if doc and not KidsClassDocumentFolder.objects.filter(
+            pk=value, kids_class_id=doc.kids_class_id
+        ).exists():
+            raise serializers.ValidationError("Geçersiz klasör.")
+        return value
+
+    def update(self, instance, validated_data):
+        initial = getattr(self, "initial_data", None) or {}
+        folder_name_in = "folder_name" in initial
+        folder_id_in = "folder_id" in initial
+        validated_data.pop("folder_name", None)
+        folder_id_val = validated_data.pop("folder_id", serializers.empty)
+        instance = super().update(instance, validated_data)
+        if folder_name_in:
+            raw = (initial.get("folder_name") or "").strip()
+            if raw:
+                user = self.context.get("request").user if self.context.get("request") else None
+                folder, _ = KidsClassDocumentFolder.objects.get_or_create(
+                    kids_class_id=instance.kids_class_id,
+                    parent=None,
+                    name=raw[:120],
+                    defaults={"created_by": user},
+                )
+                instance.folder = folder
+                instance.save(update_fields=["folder", "updated_at"])
+        elif folder_id_in:
+            instance.folder_id = folder_id_val
+            instance.save(update_fields=["folder_id", "updated_at"])
+        return instance
 
 
 def _homework_attachment_payloads(request, homework: KidsHomework):
