@@ -410,6 +410,7 @@ def _parent_child_overview_dict(student: KidsUser, request=None) -> dict:
                 {
                     "id": kc.id,
                     "name": kc.name,
+                    "class_kind": kc.class_kind,
                     "school_name": kc.school.name if kc.school else "",
                     "teacher_user_id": primary["teacher_user_id"] if primary else kc.teacher_id,
                     "teacher_display": primary["teacher_display"] if primary else "",
