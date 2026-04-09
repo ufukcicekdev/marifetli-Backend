@@ -8,7 +8,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 
-from blog.blog_payload import parse_blog_json, strip_code_fences
+from blog.blog_payload import fix_literal_json_escapes_in_text, parse_blog_json, strip_code_fences
 from blog.models import BlogPost, BlogTopicQueue
 from bot_activity.gemini_client import _call_gemini
 
@@ -26,7 +26,7 @@ def _get_blog_author():
 
 
 def _text_to_html(raw_text: str) -> str:
-    cleaned = strip_code_fences(raw_text)
+    cleaned = fix_literal_json_escapes_in_text(strip_code_fences(raw_text))
     if not cleaned:
         return ""
     # Zaten HTML üretildiyse olduğu gibi kullan.
@@ -57,7 +57,7 @@ def _first_nonempty_line(raw_text: str) -> str:
 
 
 def _fallback_payload_from_raw(topic: str, raw_text: str) -> dict:
-    cleaned = strip_code_fences(raw_text)
+    cleaned = fix_literal_json_escapes_in_text(strip_code_fences(raw_text))
     if not cleaned:
         return {}
     heading = re.search(r"^\s{0,3}#{1,6}\s+(.+)$", cleaned, flags=re.MULTILINE)

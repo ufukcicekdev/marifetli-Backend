@@ -18,6 +18,34 @@ def strip_code_fences(raw_text: str) -> str:
     return cleaned
 
 
+def _unescape_json_string_value(s: str) -> str:
+    """
+    Regex ile JSON string içi çekildiğinde \\n, \\t, \\" vb. çözülmez; metinde literal \\n kalır.
+    Geçerli JSON string parçası gibi sararak json.loads ile çözümle.
+    """
+    if not s or "\\" not in s:
+        return s
+    try:
+        return json.loads(f'"{s}"')
+    except json.JSONDecodeError:
+        return s
+
+
+def fix_literal_json_escapes_in_text(s: str) -> str:
+    """
+    Model / hatalı JSON sonrası metinde kalan iki karakterlik kaçışları gerçek karaktere çevir.
+    json.loads ile gelen doğru metinlere zarar vermez (gerçek satır sonunda \\ yoktur).
+    """
+    if not s:
+        return s
+    return (
+        s.replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace("\\/", "/")
+    )
+
+
 def parse_blog_json(raw_text: str) -> dict:
     """Gemini / n8n çıktısından {title, excerpt, content} sözlüğü çıkarır."""
     if not raw_text:
@@ -26,6 +54,9 @@ def parse_blog_json(raw_text: str) -> dict:
     try:
         data = json.loads(cleaned)
         if isinstance(data, dict):
+            for k in ("title", "excerpt", "content"):
+                if k in data and isinstance(data[k], str):
+                    data[k] = fix_literal_json_escapes_in_text(data[k])
             return data
     except json.JSONDecodeError:
         pass
@@ -58,6 +89,9 @@ def parse_blog_json(raw_text: str) -> dict:
                         try:
                             data = json.loads(chunk)
                             if isinstance(data, dict):
+                                for k in ("title", "excerpt", "content"):
+                                    if k in data and isinstance(data[k], str):
+                                        data[k] = fix_literal_json_escapes_in_text(data[k])
                                 return data
                         except json.JSONDecodeError:
                             break
@@ -72,11 +106,15 @@ def parse_blog_json(raw_text: str) -> dict:
             return m2.group(1).strip()
         return ""
 
-    title = _pull("title")[:200]
-    excerpt = _pull("excerpt")[:280]
-    content = _pull("content").strip()
+    title = _unescape_json_string_value(_pull("title"))[:200]
+    excerpt = _unescape_json_string_value(_pull("excerpt"))[:280]
+    content = _unescape_json_string_value(_pull("content")).strip()
     if title or excerpt or content:
-        return {"title": title, "excerpt": excerpt, "content": content}
+        return {
+            "title": fix_literal_json_escapes_in_text(title),
+            "excerpt": fix_literal_json_escapes_in_text(excerpt),
+            "content": fix_literal_json_escapes_in_text(content),
+        }
     return {}
 
 
@@ -103,7 +141,11 @@ def normalize_n8n_blog_fields(
             break
 
     if not blob:
-        return t0[:200], e0[:300], c0
+        return (
+            fix_literal_json_escapes_in_text(t0)[:200],
+            fix_literal_json_escapes_in_text(e0)[:300],
+            fix_literal_json_escapes_in_text(c0),
+        )
 
     nt = (str(blob.get("title") or "")).strip()[:200]
     ne = (str(blob.get("excerpt") or "")).strip()[:300]
