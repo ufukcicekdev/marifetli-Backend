@@ -71,3 +71,6 @@ celerybeat.pid
 
 # Data dumps
 datadump.json
+
+# Grafana dashboard export (yerel; commit edilmez)
+docs/grafana/marifetli-backend-dashboard.json

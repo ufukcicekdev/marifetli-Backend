@@ -63,6 +63,34 @@ scrape_configs:
 
 Not: Railway mimarine gore `target` degeri private domain veya service endpoint olabilir.
 
+## 3.1) Backend CPU / RAM (Railway — Node Exporter olmadan)
+
+Web servisi **Daphne tek süreç**; `/metrics` ciktisinda Prometheus’un standart **`process_*`** metrikleri
+gorunur ( `prometheus_client` ProcessCollector — `core.prometheus_host` import ile garanti edilir).
+
+Grafana ornekleri:
+
+- **RAM (RSS — bu Python süreci)**
+  - `process_resident_memory_bytes`
+- **CPU kullanimi (çekirdek basina oran, ~0–1 arasi)**
+  - `rate(process_cpu_seconds_total[2m])`
+- **Konteyner bellek (Railway Linux cgroup; varsa)**
+  - Kullanim: `marifetli_container_memory_usage_bytes`
+  - Limit: `marifetli_container_memory_limit_bytes`
+  - Oran (panel): `marifetli_container_memory_usage_bytes / marifetli_container_memory_limit_bytes`
+
+Not: Celery ayri Railway servisinde calisiyorsa bu metrikler **yalnizca web konteynerini** gösterir;
+worker icin ayri serviste ayni `/metrics` yaklasimi veya Celery Flower/metrik ayri düsünülür.
+
+## 3.2) Grafana dashboard (import)
+
+Dashboard JSON’u **Git’e commit etmiyoruz** (`.gitignore`: `docs/grafana/marifetli-backend-dashboard.json`).
+
+- Grafana’da panelleri kurduktan sonra **Share → Export → Save to file** ile JSON indirip isteğe bağlı olarak bu yola kaydedebilirsin; yerelde kalır, repoya gitmez.
+- Yeni ortamda: **Dashboards → New → Import** ile kendi dosyanı yükle veya aşağıdaki PromQL’lerle (§4) sıfırdan panel ekle.
+
+Panel özeti (referans): HTTP RPS, p95 gecikme, 4xx/5xx, `process_*` RAM/CPU, cgroup bellek (`marifetli_container_*`). Import sırasında **Prometheus** veri kaynağını seç.
+
 ## 4) Ilk dashboard paneler
 
 Asagidaki panellerle basla:
