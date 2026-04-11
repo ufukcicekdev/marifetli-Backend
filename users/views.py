@@ -123,8 +123,13 @@ def oauth_success(request):
     refresh = RefreshToken.for_user(user)
     access = str(refresh.access_token)
     refresh_str = str(refresh)
-    frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000").rstrip("/")
     params = urlencode({"access": access, "refresh": refresh_str})
+    # Mobile: custom URL scheme ile uygulamaya geri dön
+    platform = request.session.pop("oauth_platform", "")
+    if platform in ("android", "ios"):
+        return redirect(f"com.marifetli.app://auth/callback#{params}")
+    # Web: normal frontend yönlendirmesi
+    frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000").rstrip("/")
     # Token'ları # ile gönderiyoruz; query string uzun JWT'de kesilebiliyor
     return redirect(f"{frontend_url}/auth/callback#{params}")
 
@@ -135,9 +140,57 @@ def start_google_login(request):
     """
     Google OAuth'a gitmeden önce backend session'ı temizler.
     Böylece farklı bir Gmail ile giriş yapıldığında eski kullanıcıya bağlanmaz.
+    platform=android/ios ise session'a kaydeder; callback custom scheme'e yönlendirir.
     """
     logout(request)
+    platform = request.GET.get("platform", "")
+    if platform in ("android", "ios"):
+        request.session["oauth_platform"] = platform
     return redirect(reverse("social:begin", args=["google-oauth2"]))
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def google_native_login(request):
+    """
+    Native Google Sign-In: frontend'den gelen idToken'ı doğrular, JWT döner.
+    """
+    import requests as http_requests
+    id_token = request.data.get('idToken') or request.data.get('id_token')
+    if not id_token:
+        return Response({'error': 'idToken gerekli'}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        # Google token doğrulama
+        verify_url = f'https://oauth2.googleapis.com/tokeninfo?id_token={id_token}'
+        resp = http_requests.get(verify_url, timeout=10)
+        if resp.status_code != 200:
+            return Response({'error': 'Geçersiz token'}, status=status.HTTP_401_UNAUTHORIZED)
+        info = resp.json()
+        email = info.get('email')
+        if not email:
+            return Response({'error': 'Email alınamadı'}, status=status.HTTP_400_BAD_REQUEST)
+        # Kullanıcıyı bul veya oluştur
+        User = get_user_model()
+        user, created = User.objects.get_or_create(
+            email=email,
+            defaults={
+                'username': email.split('@')[0],
+                'first_name': info.get('given_name', ''),
+                'last_name': info.get('family_name', ''),
+            }
+        )
+        if created:
+            user.set_unusable_password()
+            user.save()
+        from achievements.services import record_activity_and_check_streak
+        record_activity_and_check_streak(user)
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
+        })
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['GET'])

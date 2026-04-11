@@ -7,6 +7,7 @@ urlpatterns = [
     path('login/', views.LoginView.as_view(), name='login'),
     # Google OAuth: önce session temizle, sonra social_django'ya yönlendir (farklı hesapla giriş için)
     path('start-google-login/', views.start_google_login),
+    path('google-native-login/', views.google_native_login),
     # Google OAuth: giriş başlatma ve tamamlama (social_django)
     path('', include('social_django.urls', namespace='social')),
     # OAuth sonrası JWT ile frontend'e yönlendirme
