@@ -118,6 +118,10 @@ def oauth_success(request):
             )
             frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000")
             return redirect(f"{frontend_url}/auth/callback?error=not_authenticated")
+    # Google ile giriş yapan kullanıcı doğrulanmış sayılır
+    if not getattr(user, 'is_verified', True):
+        user.is_verified = True
+        user.save(update_fields=['is_verified'])
     from achievements.services import record_activity_and_check_streak
     record_activity_and_check_streak(user)
     refresh = RefreshToken.for_user(user)
@@ -177,11 +181,15 @@ def google_native_login(request):
                 'username': email.split('@')[0],
                 'first_name': info.get('given_name', ''),
                 'last_name': info.get('family_name', ''),
+                'is_verified': True,
             }
         )
         if created:
             user.set_unusable_password()
             user.save()
+        elif not getattr(user, 'is_verified', True):
+            user.is_verified = True
+            user.save(update_fields=['is_verified'])
         from achievements.services import record_activity_and_check_streak
         record_activity_and_check_streak(user)
         refresh = RefreshToken.for_user(user)
