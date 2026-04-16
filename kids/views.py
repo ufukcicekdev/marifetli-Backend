@@ -5428,3 +5428,56 @@ class KidsWeeklyChampionView(KidsAuthenticatedMixin, APIView):
             except KidsUser.DoesNotExist:
                 continue
         return Response({"week_start": start.isoformat(), "top": out})
+
+
+class KidsPeerSubmissionsView(KidsAuthenticatedMixin, APIView):
+    """
+    Öğrenci: peer_submissions_visible=True olan bir challenge için
+    aynı sınıftaki diğer öğrencilerin teslimlerini getirir.
+
+    GET /api/kids/assignments/{assignment_id}/peer-submissions/
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, assignment_id):
+        if not is_kids_student_user(request.user):
+            return Response({"detail": "Yalnızca öğrenci hesapları."}, status=403)
+
+        assignment = KidsAssignment.objects.filter(pk=assignment_id).first()
+        if not assignment:
+            return Response(status=404)
+
+        # Öğrenci bu sınıfa kayıtlı mı?
+        if not KidsEnrollment.objects.filter(
+            student=request.user, kids_class_id=assignment.kids_class_id
+        ).exists():
+            return Response({"detail": "Bu projeye erişiminiz yok."}, status=403)
+
+        # Öğretmen peer görünürlüğünü açmış mı?
+        if not assignment.peer_submissions_visible:
+            return Response({"detail": "Bu challenge için paylaşım kapalı."}, status=403)
+
+        submissions = (
+            KidsSubmission.objects.filter(assignment=assignment)
+            .exclude(student=request.user)
+            .select_related("student")
+            .order_by("-created_at")
+        )
+
+        data = []
+        for sub in submissions:
+            s = sub.student
+            data.append({
+                "id": sub.id,
+                "student_name": s.full_name or s.username or "Öğrenci",
+                "student_avatar": s.profile_picture or None,
+                "kind": sub.kind,
+                "steps_payload": sub.steps_payload,
+                "video_url": sub.video_url,
+                "caption": sub.caption,
+                "created_at": sub.created_at,
+                "is_teacher_pick": sub.is_teacher_pick,
+            })
+
+        return Response({"assignment_id": assignment_id, "submissions": data})

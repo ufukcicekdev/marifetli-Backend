@@ -17,5 +17,5 @@ else
   echo "[start.sh] Running migrate..."
   python manage.py migrate --noinput
   echo "[start.sh] Migrate OK, starting daphne ASGI (HTTP + WebSocket)..."
-  exec daphne -b 0.0.0.0 -p "$PORT" marifetli_project.asgi:application
+  exec daphne -b 0.0.0.0 -p "$PORT" --http-timeout 180 marifetli_project.asgi:application
 fi

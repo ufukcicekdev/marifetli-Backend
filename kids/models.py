@@ -624,6 +624,11 @@ class KidsAssignment(models.Model):
         choices=ChallengeCardTheme.choices,
         help_text="Öğretmen/öğrenci listesinde kart üst bandı ve etiket; boşsa istemci id’ye göre varsayılan döner.",
     )
+    peer_submissions_visible = models.BooleanField(
+        "öğrenciler birbirinin çalışmalarını görebilir",
+        default=False,
+        help_text="True ise aynı sınıftaki öğrenciler bu challenge'a ait diğer teslimatleri görebilir.",
+    )
     is_published = models.BooleanField(default=True)
     students_notified_at = models.DateTimeField(
         "öğrencilere bildirim (panel)",

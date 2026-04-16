@@ -75,6 +75,7 @@ INSTALLED_APPS = [
     "bot_activity",
     "category_experts",
     "kids",
+    "meb_programlari",
 ]
 
 # Request access logging (optional, env ile acilir).

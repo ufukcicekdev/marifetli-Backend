@@ -1,6 +1,7 @@
 from django.urls import path
 
 from . import challenge_views, kindergarten_views, test_views, views
+from meb_programlari.views import OgretmenAIChatView, OgretmenAiDerslerView
 
 urlpatterns = [
     path("auth/login/", views.KidsLoginView.as_view()),
@@ -288,4 +289,7 @@ urlpatterns = [
         "classes/<int:class_id>/challenges/<int:pk>/review/",
         challenge_views.KidsTeacherChallengeReviewView.as_view(),
     ),
+    path("ogretmen-ai/chat/", OgretmenAIChatView.as_view()),
+    path("assignments/<int:assignment_id>/peer-submissions/", views.KidsPeerSubmissionsView.as_view()),
+    path("classes/<int:class_id>/ogretmen-ai/dersler/", OgretmenAiDerslerView.as_view()),
 ]

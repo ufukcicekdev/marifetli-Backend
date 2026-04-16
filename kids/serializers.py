@@ -988,6 +988,7 @@ class KidsAssignmentSerializer(serializers.ModelSerializer):
             "submission_opens_at",
             "submission_closes_at",
             "is_published",
+            "peer_submissions_visible",
             "students_notified_at",
             "created_at",
             "updated_at",
