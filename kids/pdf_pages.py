@@ -7,7 +7,10 @@ import io
 
 def pdf_bytes_to_png_list(data: bytes, *, max_pages: int = 10, dpi: int = 144) -> list[bytes]:
     """PyMuPDF ile rasterleştirme; en fazla `max_pages` sayfa."""
-    import fitz  # PyMuPDF
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        import pymupdf as fitz  # PyMuPDF >= 1.24 alternatif adı
 
     if not data or len(data) < 8:
         raise ValueError("PDF dosyası boş veya geçersiz.")
@@ -25,6 +28,30 @@ def pdf_bytes_to_png_list(data: bytes, *, max_pages: int = 10, dpi: int = 144) -
             pix = page.get_pixmap(dpi=dpi)
             out.append(pix.tobytes("png"))
         return out
+    finally:
+        doc.close()
+
+
+def pdf_bytes_to_text(data: bytes) -> str:
+    """PyMuPDF ile PDF'ten düz metin çıkarır."""
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        try:
+            import pymupdf as fitz  # PyMuPDF >= 1.24 alternatif adı
+        except ImportError:
+            raise ImportError(
+                "PDF metin çıkarmak için PyMuPDF gerekli. "
+                "Lütfen 'pip install pymupdf' komutunu çalıştırın."
+            )
+    if not data or len(data) < 8:
+        raise ValueError("PDF dosyası boş veya geçersiz.")
+    doc = fitz.open(stream=data, filetype="pdf")
+    try:
+        parts: list[str] = []
+        for page in doc:
+            parts.append(page.get_text("text"))
+        return "\n".join(parts).strip()
     finally:
         doc.close()
 

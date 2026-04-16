@@ -39,7 +39,7 @@ from .models import (
     KidsUser,
 )
 from .notifications_service import create_kids_notification
-from .pdf_pages import PngBytesFile, pdf_bytes_to_png_list
+from .pdf_pages import PngBytesFile, pdf_bytes_to_png_list, pdf_bytes_to_text
 from .test_normalize import normalize_constructed_answer
 from .test_serializers import (
     MAX_TEST_EXTRACT_SOURCE_PAGES,
@@ -52,7 +52,7 @@ from .test_serializers import (
     KidsTestExtractSerializer,
     KidsTestSerializer,
 )
-from .tests_ai import extract_test_from_images
+from .tests_ai import extract_test_from_images, generate_test_from_multiple
 
 
 def _question_format_from_meta(q: KidsTestQuestion) -> str:
@@ -318,6 +318,81 @@ class KidsTestExtractView(KidsAuthenticatedMixin, APIView):
             payload = extract_test_from_images(files)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(payload)
+
+
+class KidsTestGenerateFromDocumentView(KidsAuthenticatedMixin, APIView):
+    """
+    POST /tests/generate-from-document/
+    Multipart: file (PDF veya TXT) + question_count (int, default 20)
+    PDF'ten metin çıkarılır, sonra Gemini'ye gönderilerek sorular üretilir.
+    """
+    permission_classes = [IsAuthenticated]
+
+    MAX_FILE_BYTES = 20 * 1024 * 1024  # 20 MB
+
+    MAX_FILES = 3
+
+    def post(self, request):
+        if not is_main_user(request.user) or not is_kids_teacher_or_admin_user(request.user):
+            return Response(status=status.HTTP_403_FORBIDDEN)
+
+        uploaded_list = request.FILES.getlist("files")
+        if not uploaded_list:
+            # Geriye dönük uyumluluk: eski "file" alanını da kabul et
+            single = request.FILES.get("file")
+            if single:
+                uploaded_list = [single]
+        if not uploaded_list:
+            return Response({"detail": "En az bir dosya gerekli."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(uploaded_list) > self.MAX_FILES:
+            return Response({"detail": f"En fazla {self.MAX_FILES} dosya yüklenebilir."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            question_count = int(request.data.get("question_count") or 10)
+        except (TypeError, ValueError):
+            question_count = 10
+        question_count = max(1, min(50, question_count))
+
+        # Her dosyayı validate et ve türüne göre ayır
+        inline_parts: list[tuple[bytes, str]] = []  # (raw, mime)
+        text_parts: list[str] = []
+
+        for uploaded in uploaded_list:
+            if uploaded.size > self.MAX_FILE_BYTES:
+                return Response({"detail": f"{uploaded.name}: Dosya çok büyük (en fazla 20 MB)."}, status=status.HTTP_400_BAD_REQUEST)
+            mime = (getattr(uploaded, "content_type", "") or "").strip().lower()
+            fname = (uploaded.name or "").lower()
+            raw = uploaded.read()
+
+            is_pdf = mime == "application/pdf" or fname.endswith(".pdf")
+            is_txt = mime in ("text/plain", "text/html") or fname.endswith((".txt", ".md"))
+            is_image = mime.startswith("image/") or fname.endswith((".jpg", ".jpeg", ".png", ".webp"))
+
+            if not is_pdf and not is_txt and not is_image:
+                return Response(
+                    {"detail": f"{uploaded.name}: Desteklenmeyen tür. PDF, görsel veya TXT yükleyin."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if is_txt:
+                try:
+                    text_parts.append(raw.decode("utf-8", errors="replace").strip())
+                except Exception:
+                    pass
+            else:
+                effective_mime = mime if mime else ("application/pdf" if is_pdf else "image/jpeg")
+                inline_parts.append((raw, effective_mime))
+
+        # Birden fazla dosya varsa hepsini tek Gemini isteğinde gönder
+        try:
+            payload = generate_test_from_multiple(
+                inline_parts=inline_parts,
+                text_parts=text_parts,
+                question_count=question_count,
+            )
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
         return Response(payload)
 
 

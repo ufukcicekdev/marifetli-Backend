@@ -191,16 +191,86 @@ def _gemini_generate(parts: list[dict[str, Any]]) -> str:
     )
     resp.raise_for_status()
     data = resp.json()
+
+    # Hata ayıklama: tüm yanıtı logla
+    prompt_feedback = data.get("promptFeedback") or {}
+    block_reason = prompt_feedback.get("blockReason")
+    if block_reason:
+        logger.warning("Gemini promptFeedback blockReason=%s feedback=%s", block_reason, prompt_feedback)
+
     cands = data.get("candidates") or []
     if not cands:
+        logger.warning("Gemini boş candidates döndü; tam yanıt=%s", json.dumps(data, ensure_ascii=False)[:2000])
         return ""
-    out_parts = (cands[0].get("content") or {}).get("parts") or []
+
+    cand = cands[0]
+    finish_reason = cand.get("finishReason") or ""
+    if finish_reason and finish_reason not in ("STOP", "MAX_TOKENS"):
+        logger.warning("Gemini finishReason=%s candidate=%s", finish_reason, json.dumps(cand, ensure_ascii=False)[:1000])
+
+    out_parts = (cand.get("content") or {}).get("parts") or []
     joined = []
     for p in out_parts:
         t = (p.get("text") or "").strip()
         if t:
             joined.append(t)
-    return "\n".join(joined).strip()
+    result = "\n".join(joined).strip()
+    if not result:
+        logger.warning("Gemini parts boş; finishReason=%s candidate=%s", finish_reason, json.dumps(cand, ensure_ascii=False)[:1000])
+    return result
+
+
+def _gemini_generate_vision(parts: list[dict[str, Any]]) -> str:
+    """
+    Görsel içerikli istekler için _gemini_generate benzeri; responseMimeType kullanmaz
+    çünkü bazı Gemini sürümlerinde görsel+JSON MIME kombinasyonu boş yanıt döndürür.
+    """
+    api_key = (getattr(settings, "GEMINI_API_KEY", None) or "").strip()
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY tanımlı değil.")
+    model = (getattr(settings, "GEMINI_MODEL", None) or "gemini-2.0-flash").strip()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    payload = {
+        "contents": [{"parts": parts}],
+        "generationConfig": {
+            "maxOutputTokens": int(getattr(settings, "GEMINI_TESTS_MAX_OUTPUT_TOKENS", 16384) or 16384),
+            "temperature": 0.2,
+            # responseMimeType KALDIRILDI — görsel isteklerle uyumsuz olabiliyor
+        },
+    }
+    resp = requests.post(
+        url,
+        json=payload,
+        timeout=120,
+        headers={
+            "Content-Type": "application/json",
+            "X-goog-api-key": api_key,
+        },
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    prompt_feedback = data.get("promptFeedback") or {}
+    block_reason = prompt_feedback.get("blockReason")
+    if block_reason:
+        logger.warning("Gemini vision blockReason=%s", block_reason)
+
+    cands = data.get("candidates") or []
+    if not cands:
+        logger.warning("Gemini vision boş candidates; yanıt=%s", json.dumps(data, ensure_ascii=False)[:2000])
+        return ""
+
+    cand = cands[0]
+    finish_reason = cand.get("finishReason") or ""
+    if finish_reason and finish_reason not in ("STOP", "MAX_TOKENS"):
+        logger.warning("Gemini vision finishReason=%s", finish_reason)
+
+    out_parts = (cand.get("content") or {}).get("parts") or []
+    joined = [p.get("text", "").strip() for p in out_parts if p.get("text", "").strip()]
+    result = "\n".join(joined).strip()
+    if not result:
+        logger.warning("Gemini vision parts boş; finishReason=%s cand=%s", finish_reason, json.dumps(cand, ensure_ascii=False)[:500])
+    return result
 
 
 def _parse_question_format(row: dict[str, Any]) -> str:
@@ -403,6 +473,198 @@ def _validate_questions(payload: dict[str, Any], *, num_source_pages: int = 1) -
         "passages": cleaned_passages,
         "questions": cleaned_questions,
     }
+
+
+def generate_test_from_document(text: str, question_count: int = 20) -> dict[str, Any]:
+    """
+    Verilen metin içeriğinden `question_count` adet soru üretir.
+    Gemini'ye metin olarak gönderilir (görsel yoktur).
+    """
+    if not text or not text.strip():
+        raise ValueError("Döküman metni boş.")
+    question_count = max(1, min(50, int(question_count)))
+    preview = text.strip()
+    # Çok uzun metinleri kırp (Gemini token limiti)
+    if len(preview) > 60000:
+        preview = preview[:60000] + "\n... [metin kırpıldı]"
+
+    prompt = (
+        f"You are a Turkish primary-school teacher. "
+        f"Read the following educational text and do TWO things:\n"
+        f"1) Include the FULL text as a reading passage (passages array, order=1, give it a short title).\n"
+        f"2) Generate exactly {question_count} assessment questions about that passage, suitable for primary-school students. "
+        f"Mix question types: prefer multiple-choice (2–5 options) but include some short-answer (constructed) questions where appropriate. "
+        f"For multiple_choice: set correct_choice_key to A–E. "
+        f"For constructed: set choices=[], constructed_answer to the expected short answer. "
+        f"Set reading_passage_order=1 for every question. "
+        f"Set a concise topic and subtopic for each question. "
+        f"Return ONLY valid JSON, no markdown:\n"
+        f'{{"title":"...","instructions":"...","passages":[{{"order":1,"title":"...","body":"<full text here>"}}],"questions":['
+        f'{{"stem":"...","topic":"...","subtopic":"...","question_format":"multiple_choice|constructed",'
+        f'"reading_passage_order":1,"choices":[{{"text":"..."}}],"correct_choice_key":"A","constructed_answer":"","points":1}}]}}\n\n'
+        f"TEXT:\n{preview}"
+    )
+
+    parts: list[dict[str, Any]] = [{"text": prompt}]
+    text_response = _gemini_generate(parts)
+    if not text_response:
+        raise ValueError("AI servisinden boş yanıt alındı.")
+    cleaned = re.sub(r"^```(?:json)?\s*", "", text_response.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    parsed = _parse_tests_ai_json_response(cleaned)
+    if not isinstance(parsed, dict):
+        logger.warning(
+            "Generate-from-doc AI JSON parse failed; head=%r", (text_response or "")[:400]
+        )
+        raise ValueError("AI yanıtı JSON formatında ayrıştırılamadı.")
+    return _validate_questions(parsed, num_source_pages=1)
+
+
+def generate_test_from_inline(data: bytes, mime_type: str, question_count: int = 20) -> dict[str, Any]:
+    """
+    Dosyayı (PDF veya görsel) doğrudan Gemini'ye inline gönderir.
+    Gemini 1.5+ ve 2.0: application/pdf, image/jpeg, image/png, image/webp destekler.
+    """
+    if not data:
+        raise ValueError("Dosya içeriği boş.")
+    question_count = max(1, min(50, int(question_count)))
+    encoded = base64.b64encode(data).decode("ascii")
+    parts: list[dict[str, Any]] = [
+        {
+            "text": (
+                f"You are a Turkish primary-school teacher. "
+                f"The attached file contains educational material or a test. Do TWO things:\n"
+                f"1) If the file contains readable text/story/passage content, include it as a reading passage "
+                f"(passages array, order=1, short title, full body text). If it is purely a question sheet with no body text, set passages=[].\n"
+                f"2) Extract all existing questions exactly as written, OR if there are no pre-formed questions, "
+                f"generate exactly {question_count} assessment questions based on the content. "
+                f"For multiple_choice: 2–5 choices, set correct_choice_key to A–E. "
+                f"For constructed: choices=[], set constructed_answer to the expected short answer. "
+                f"If a passage was included, set reading_passage_order=1 on every question. "
+                f"Return ONLY valid JSON, no markdown:\n"
+                f'{{"title":"...","instructions":"...","passages":[{{"order":1,"title":"...","body":"..."}}],"questions":['
+                f'{{"stem":"...","topic":"...","subtopic":"...","question_format":"multiple_choice|constructed",'
+                f'"reading_passage_order":1,"choices":[{{"text":"..."}}],"correct_choice_key":"A","constructed_answer":"","points":1}}]}}'
+            )
+        },
+        {
+            "inlineData": {
+                "mimeType": mime_type,
+                "data": encoded,
+            }
+        },
+    ]
+    text_response = _gemini_generate_vision(parts)
+    if not text_response:
+        raise ValueError("AI servisinden boş yanıt alındı.")
+    cleaned = re.sub(r"^```(?:json)?\s*", "", text_response.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    parsed = _parse_tests_ai_json_response(cleaned)
+    if not isinstance(parsed, dict):
+        logger.warning("generate_test_from_inline JSON parse failed; head=%r", (text_response or "")[:400])
+        raise ValueError("AI yanıtı JSON formatında ayrıştırılamadı.")
+    return _validate_questions(parsed, num_source_pages=1)
+
+
+def generate_test_from_multiple(
+    inline_parts: list[tuple[bytes, str]],
+    text_parts: list[str],
+    question_count: int = 10,
+) -> dict[str, Any]:
+    """
+    En fazla 3 dosyayı (PDF/görsel/metin) tek Gemini isteğinde birleştirir.
+    inline_parts: [(raw_bytes, mime_type), ...]
+    text_parts: [text_str, ...]
+    """
+    if not inline_parts and not text_parts:
+        raise ValueError("En az bir dosya gerekli.")
+    question_count = max(1, min(50, int(question_count)))
+
+    combined_text = "\n\n---\n\n".join(text_parts) if text_parts else ""
+
+    prompt = (
+        f"You are a Turkish primary-school teacher. "
+        f"The attached file(s) and/or text contain educational material or a test. Do TWO things:\n"
+        f"1) If there is readable story/passage text, include it as a reading passage "
+        f"(passages array, order=1, short title, full body). If purely a question sheet, set passages=[].\n"
+        f"2) Extract all existing questions exactly as written, OR if no pre-formed questions exist, "
+        f"generate exactly {question_count} assessment questions based on the content. "
+        f"For multiple_choice: 2–5 choices, correct_choice_key A–E. "
+        f"For constructed: choices=[], constructed_answer = expected short answer. "
+        f"If a passage was included set reading_passage_order=1 on every question. "
+        f"Return ONLY valid JSON, no markdown:\n"
+        f'{{"title":"...","instructions":"...","passages":[{{"order":1,"title":"...","body":"..."}}],"questions":['
+        f'{{"stem":"...","topic":"...","subtopic":"...","question_format":"multiple_choice|constructed",'
+        f'"reading_passage_order":1,"choices":[{{"text":"..."}}],"correct_choice_key":"A","constructed_answer":"","points":1}}]}}'
+    )
+    if combined_text:
+        prompt += f"\n\nTEXT CONTENT:\n{combined_text[:60000]}"
+
+    parts: list[dict[str, Any]] = [{"text": prompt}]
+    for raw, mime in inline_parts:
+        if not raw:
+            continue
+        parts.append({"inlineData": {"mimeType": mime, "data": base64.b64encode(raw).decode("ascii")}})
+
+    use_vision = bool(inline_parts)
+    text_response = _gemini_generate_vision(parts) if use_vision else _gemini_generate(parts)
+    if not text_response:
+        raise ValueError("AI servisinden boş yanıt alındı.")
+    cleaned = re.sub(r"^```(?:json)?\s*", "", text_response.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    parsed = _parse_tests_ai_json_response(cleaned)
+    if not isinstance(parsed, dict):
+        logger.warning("generate_test_from_multiple JSON parse failed; head=%r", (text_response or "")[:400])
+        raise ValueError("AI yanıtı JSON formatında ayrıştırılamadı.")
+    return _validate_questions(parsed, num_source_pages=max(1, len(inline_parts)))
+
+
+def generate_test_from_images(files: list[Any], question_count: int = 20) -> dict[str, Any]:
+    """
+    Görsel tabanlı (taranmış) PDF sayfalarından `question_count` adet soru üretir.
+    Görseller Gemini'ye gönderilir; AI içeriği okuyup soru oluşturur.
+    """
+    if not files:
+        raise ValueError("En az bir görsel yüklenmeli.")
+    question_count = max(1, min(50, int(question_count)))
+    n_pages = len(files)
+    parts: list[dict[str, Any]] = [
+        {
+            "text": (
+                f"You are a Turkish primary-school teacher. "
+                f"The uploaded image(s) contain educational content (textbook pages, worksheets, or lesson material). "
+                f"Read the content carefully and generate exactly {question_count} assessment questions "
+                f"suitable for primary-school students. "
+                f"Mix question types: prefer multiple-choice (2–5 options) but include some short-answer (constructed) questions where appropriate. "
+                f"For multiple_choice: set correct_choice_key to A–E. "
+                f"For constructed: set choices=[], constructed_answer to the expected short answer. "
+                f"Set a concise topic and subtopic for each question based on the content. "
+                f"There are {n_pages} page(s). "
+                f"Return ONLY valid JSON, no markdown: "
+                f'{{"title":"...","instructions":"...","passages":[],"questions":['
+                f'{{"stem":"...","topic":"...","subtopic":"...","question_format":"multiple_choice|constructed",'
+                f'"choices":[{{"text":"..."}}],"correct_choice_key":"A","constructed_answer":"","points":1}}]}}'
+            )
+        }
+    ]
+    for f in files:
+        raw = f.read() if callable(getattr(f, "read", None)) else bytes(f)
+        if not raw:
+            continue
+        mime = (getattr(f, "content_type", "") or "").strip().lower() or "image/png"
+        encoded = base64.b64encode(raw).decode("ascii")
+        parts.append({"inlineData": {"mimeType": mime, "data": encoded}})
+
+    text_response = _gemini_generate_vision(parts)
+    if not text_response:
+        raise ValueError("AI servisinden boş yanıt alındı.")
+    cleaned = re.sub(r"^```(?:json)?\s*", "", text_response.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    parsed = _parse_tests_ai_json_response(cleaned)
+    if not isinstance(parsed, dict):
+        logger.warning("Generate-from-images AI JSON parse failed; head=%r", (text_response or "")[:400])
+        raise ValueError("AI yanıtı JSON formatında ayrıştırılamadı.")
+    return _validate_questions(parsed, num_source_pages=n_pages)
 
 
 def extract_test_from_images(files: list[Any]) -> dict[str, Any]:

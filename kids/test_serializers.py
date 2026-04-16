@@ -13,7 +13,7 @@ from .serializers import _absolute_media_url
 from .test_normalize import normalize_constructed_answer
 
 
-MAX_TEST_EXTRACT_SOURCE_PAGES = 10
+MAX_TEST_EXTRACT_SOURCE_PAGES = 3
 _MAX_TEST_EXTRACT_PDF_BYTES = 30 * 1024 * 1024
 
 
