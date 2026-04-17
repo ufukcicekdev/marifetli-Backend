@@ -631,6 +631,26 @@ CELERY_RESULT_BACKEND = config("CELERY_RESULT_BACKEND", default=CELERY_BROKER_UR
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_TIMEZONE = "Europe/Istanbul"
+# Sonuçlar kullanılmıyor (fire-and-forget .delay); Redis ve worker yükünü azaltır.
+CELERY_TASK_IGNORE_RESULT = True
+CELERY_RESULT_EXPIRES = 3600
+CELERY_BROKER_POOL_LIMIT = 10
+
+# Worker bellek: prefork varsayılanı = CPU kadar tam Django süreci → RAM çok yükselir.
+# concurrency düşük + child recycle + RSS tavanı ile fatura/RSS kontrol altında kalır.
+CELERY_WORKER_CONCURRENCY = max(1, config("CELERY_WORKER_CONCURRENCY", default=1, cast=int))
+CELERY_WORKER_PREFETCH_MULTIPLIER = max(1, config("CELERY_WORKER_PREFETCH_MULTIPLIER", default=1, cast=int))
+CELERY_WORKER_MAX_TASKS_PER_CHILD = max(1, config("CELERY_WORKER_MAX_TASKS_PER_CHILD", default=80, cast=int))
+# Child başına RSS tavanı (KiB). Varsayılan ~980 MiB; 0 = sınır kapat (önerilmez).
+_celery_max_mem_raw = config("CELERY_WORKER_MAX_MEMORY_PER_CHILD_KB", default="1000000").strip()
+if _celery_max_mem_raw == "0":
+    CELERY_WORKER_MAX_MEMORY_PER_CHILD = None
+else:
+    try:
+        _celery_max_mem_val = int(_celery_max_mem_raw) if _celery_max_mem_raw else 1_000_000
+    except ValueError:
+        _celery_max_mem_val = 1_000_000
+    CELERY_WORKER_MAX_MEMORY_PER_CHILD = _celery_max_mem_val if _celery_max_mem_val > 0 else None
 
 # Celery Beat - periyodik görevler (sitemap'leri GSC API ile submit, günde 3 kez; bot aktivite günde 6 kez)
 CELERY_BEAT_SCHEDULE = {
