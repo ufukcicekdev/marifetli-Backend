@@ -61,8 +61,8 @@ python manage.py push_to_anythingllm --yil 2025/2026 --delay 1.5
 `.env` dosyasında tanımlı — komut satırında verme gerek yok:
 
 ```env
-ANYTHINGLLM_URL=https://anythingllm-production-6381.up.railway.app
-ANYTHINGLLM_API_KEY=PPC26XE-7ZH4H9T-GQQQQKY-KC173MZ
+ANYTHINGLLM_URL=https://<senin-anythingllm-servisin>.up.railway.app
+ANYTHINGLLM_API_KEY=<AnythingLLM ayarlarından API key>
 ANYTHINGLLM_WORKSPACE=ogretmen-ai
 ```
 

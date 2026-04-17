@@ -635,6 +635,8 @@ CELERY_TIMEZONE = "Europe/Istanbul"
 CELERY_TASK_IGNORE_RESULT = True
 CELERY_RESULT_EXPIRES = 3600
 CELERY_BROKER_POOL_LIMIT = 10
+# Celery 6+: başlangıçta Redis’e bağlanırken yeniden deneme buradan yönetilir (eski broker_connection_retry ayrı).
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 
 # Worker bellek: prefork varsayılanı = CPU kadar tam Django süreci → RAM çok yükselir.
 # concurrency düşük + child recycle + RSS tavanı ile fatura/RSS kontrol altında kalır.
