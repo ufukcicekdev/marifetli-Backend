@@ -85,6 +85,8 @@ from .models import (
     KidsUserBadge,
     KidsUserRole,
     MebSchoolDirectory,
+    ReadingStory,
+    ReadingWord,
 )
 from .notifications_service import (
     create_kids_notification,
@@ -157,6 +159,8 @@ from .serializers import (
     KidsUserProfileUpdateSerializer,
     KidsUserSerializer,
     kids_user_growth_stage,
+    ReadingWordSerializer,
+    ReadingStorySerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -5481,3 +5485,51 @@ class KidsPeerSubmissionsView(KidsAuthenticatedMixin, APIView):
             })
 
         return Response({"assignment_id": assignment_id, "submissions": data})
+
+
+class KidsReadingWordsView(APIView):
+    """
+    GET /api/kids/student/reading/words/
+    ?difficulty=easy&grade_level=1&count=10
+    Rastgele N kelime döner.
+    """
+    authentication_classes = [KidsJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not is_kids_student_user(request.user):
+            return Response({"detail": "Yalnızca öğrenciler erişebilir."}, status=403)
+        difficulty = request.query_params.get("difficulty", "easy")
+        grade_level = int(request.query_params.get("grade_level", 1))
+        count = min(int(request.query_params.get("count", 10)), 30)
+        qs = ReadingWord.objects.filter(is_active=True, difficulty=difficulty)
+        # Grade esnekliği: tam eşleşme yoksa tüm aktif kelimeleri kullan
+        grade_qs = qs.filter(grade_level=grade_level)
+        if grade_qs.count() < count:
+            grade_qs = qs
+        words = list(grade_qs.order_by("?")[:count])
+        return Response(ReadingWordSerializer(words, many=True).data)
+
+
+class KidsReadingStoryView(APIView):
+    """
+    GET /api/kids/student/reading/story/
+    ?difficulty=easy&grade_level=1
+    Rastgele 1 hikaye (soruları ile birlikte) döner.
+    """
+    authentication_classes = [KidsJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not is_kids_student_user(request.user):
+            return Response({"detail": "Yalnızca öğrenciler erişebilir."}, status=403)
+        difficulty = request.query_params.get("difficulty", "easy")
+        grade_level = int(request.query_params.get("grade_level", 1))
+        qs = ReadingStory.objects.filter(is_active=True, difficulty=difficulty).prefetch_related("questions")
+        grade_qs = qs.filter(grade_level=grade_level)
+        if not grade_qs.exists():
+            grade_qs = qs
+        if not grade_qs.exists():
+            return Response({"detail": "Bu seviyede hikaye bulunamadı."}, status=404)
+        story = grade_qs.order_by("?").first()
+        return Response(ReadingStorySerializer(story).data)

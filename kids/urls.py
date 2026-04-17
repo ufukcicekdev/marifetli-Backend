@@ -293,4 +293,6 @@ urlpatterns = [
     path("ogretmen-ai/chat/", OgretmenAIChatView.as_view()),
     path("assignments/<int:assignment_id>/peer-submissions/", views.KidsPeerSubmissionsView.as_view()),
     path("classes/<int:class_id>/ogretmen-ai/dersler/", OgretmenAiDerslerView.as_view()),
+    path("student/reading/words/", views.KidsReadingWordsView.as_view()),
+    path("student/reading/story/", views.KidsReadingStoryView.as_view()),
 ]

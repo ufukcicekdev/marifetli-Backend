@@ -1916,6 +1916,76 @@ class KidsFCMDeviceToken(models.Model):
         verbose_name_plural = "Kids FCM tokenları"
 
 
+class ReadingWord(models.Model):
+    """Kelime okuma oyunu için kelime havuzu."""
+
+    class Difficulty(models.TextChoices):
+        EASY = "easy", "Kolay"
+        MEDIUM = "medium", "Orta"
+        HARD = "hard", "Zor"
+
+    word = models.CharField("kelime", max_length=60, db_index=True)
+    difficulty = models.CharField(max_length=16, choices=Difficulty.choices, default=Difficulty.EASY, db_index=True)
+    grade_level = models.PositiveSmallIntegerField("sınıf seviyesi", default=1, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "kids_reading_words"
+        ordering = ["difficulty", "grade_level", "word"]
+        verbose_name = "Okuma kelimesi"
+        verbose_name_plural = "Okuma kelimeleri"
+
+    def __str__(self):
+        return f"{self.word} ({self.difficulty} / {self.grade_level}. sınıf)"
+
+
+class ReadingStory(models.Model):
+    """Hikaye okuma oyunu için hikaye havuzu."""
+
+    class Difficulty(models.TextChoices):
+        EASY = "easy", "Kolay"
+        MEDIUM = "medium", "Orta"
+        HARD = "hard", "Zor"
+
+    title = models.CharField("başlık", max_length=200, blank=True)
+    text = models.TextField("hikaye metni")
+    difficulty = models.CharField(max_length=16, choices=Difficulty.choices, default=Difficulty.EASY, db_index=True)
+    grade_level = models.PositiveSmallIntegerField("sınıf seviyesi", default=1, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "kids_reading_stories"
+        ordering = ["difficulty", "grade_level", "id"]
+        verbose_name = "Okuma hikayesi"
+        verbose_name_plural = "Okuma hikayeleri"
+
+    def __str__(self):
+        return self.title or self.text[:60]
+
+
+class ReadingStoryQuestion(models.Model):
+    """Hikayeye ait anlama sorusu."""
+
+    story = models.ForeignKey(ReadingStory, on_delete=models.CASCADE, related_name="questions")
+    question = models.CharField("soru", max_length=300)
+    option_a = models.CharField("A şıkkı", max_length=150)
+    option_b = models.CharField("B şıkkı", max_length=150)
+    option_c = models.CharField("C şıkkı", max_length=150)
+    correct = models.CharField("doğru şık", max_length=1, choices=[("a", "A"), ("b", "B"), ("c", "C")])
+    order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        db_table = "kids_reading_story_questions"
+        ordering = ["order", "id"]
+        verbose_name = "Hikaye sorusu"
+        verbose_name_plural = "Hikaye soruları"
+
+    def __str__(self):
+        return self.question[:80]
+
+
 class MebSchoolDirectory(models.Model):
     """
     MEB okul listesi (meb.gov.tr). İl, ilçe ve okul adı ayrıştırılarak saklanır.

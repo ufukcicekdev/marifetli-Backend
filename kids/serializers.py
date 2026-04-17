@@ -38,6 +38,9 @@ from .models import (
     KidsMessageReadState,
     KidsNotification,
     KidsParentGamePolicy,
+    ReadingStory,
+    ReadingStoryQuestion,
+    ReadingWord,
     KidsSchool,
     KidsSchoolTeacher,
     KidsSchoolYearProfile,
@@ -2002,3 +2005,28 @@ class KidsChallengeInviteReadSerializer(serializers.ModelSerializer):
             "created_at",
             "responded_at",
         )
+
+
+class ReadingWordSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ReadingWord
+        fields = ("id", "word", "difficulty", "grade_level")
+
+
+class ReadingStoryQuestionSerializer(serializers.ModelSerializer):
+    options = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReadingStoryQuestion
+        fields = ("id", "question", "options", "correct", "order")
+
+    def get_options(self, obj):
+        return [obj.option_a, obj.option_b, obj.option_c]
+
+
+class ReadingStorySerializer(serializers.ModelSerializer):
+    questions = ReadingStoryQuestionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ReadingStory
+        fields = ("id", "title", "text", "difficulty", "grade_level", "questions")
