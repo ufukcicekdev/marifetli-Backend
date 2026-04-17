@@ -5487,6 +5487,47 @@ class KidsPeerSubmissionsView(KidsAuthenticatedMixin, APIView):
         return Response({"assignment_id": assignment_id, "submissions": data})
 
 
+class KidsTtsView(APIView):
+    """
+    GET /api/kids/tts/?text=PORTAKAL
+    Returns Turkish MP3 audio via gTTS. Cached by text hash.
+    No auth required (public, short texts only).
+    """
+    authentication_classes = []
+    permission_classes = []
+    _cache_dir = None
+
+    def _get_cache_dir(self):
+        from django.conf import settings
+        import os
+        d = os.path.join(settings.BASE_DIR, 'tts_cache')
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def get(self, request):
+        import hashlib
+        import os
+        from django.http import FileResponse, HttpResponseBadRequest
+        try:
+            from gtts import gTTS
+        except ImportError:
+            return HttpResponseBadRequest('gTTS not installed')
+
+        text = (request.GET.get('text') or '').strip()[:200]
+        if not text:
+            return HttpResponseBadRequest('text required')
+
+        cache_dir = self._get_cache_dir()
+        key = hashlib.md5(f'tr:{text}'.encode()).hexdigest()
+        path = os.path.join(cache_dir, f'{key}.mp3')
+
+        if not os.path.exists(path):
+            tts = gTTS(text=text, lang='tr', slow=False)
+            tts.save(path)
+
+        return FileResponse(open(path, 'rb'), content_type='audio/mpeg')
+
+
 class KidsReadingWordsView(APIView):
     """
     GET /api/kids/student/reading/words/
