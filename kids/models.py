@@ -1759,6 +1759,83 @@ class KidsAnnouncementAttachment(models.Model):
         ordering = ["created_at", "id"]
 
 
+class KidsAnnouncementRSVP(models.Model):
+    """Etkinlik duyurularına veli katılım yanıtı (Katılıyorum / Katılamıyorum)."""
+
+    class Response(models.TextChoices):
+        YES = "yes", "Katılıyorum"
+        NO = "no", "Katılamıyorum"
+        MAYBE = "maybe", "Belki"
+
+    announcement = models.ForeignKey(
+        KidsAnnouncement,
+        on_delete=models.CASCADE,
+        related_name="rsvps",
+    )
+    parent_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="kids_rsvps",
+    )
+    student = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        related_name="rsvps",
+        null=True,
+        blank=True,
+    )
+    response = models.CharField(max_length=8, choices=Response.choices)
+    note = models.CharField(max_length=300, blank=True)
+    responded_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_announcement_rsvps"
+        unique_together = [("announcement", "parent_user", "student")]
+        ordering = ["-responded_at"]
+
+
+class KidsAttendanceRecord(models.Model):
+    """Standart sınıflar için yoklama kaydı (anaokulu günlük kayıtlarından ayrı)."""
+
+    class Status(models.TextChoices):
+        PRESENT = "present", "Geldi"
+        ABSENT = "absent", "Gelmedi"
+        LATE = "late", "Geç Geldi"
+        EXCUSED = "excused", "İzinli"
+
+    kids_class = models.ForeignKey(
+        KidsClass,
+        on_delete=models.CASCADE,
+        related_name="attendance_records",
+    )
+    student = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        related_name="attendance_records",
+    )
+    date = models.DateField(db_index=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PRESENT)
+    note = models.CharField(max_length=300, blank=True)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="kids_attendance_recorded",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_attendance_records"
+        unique_together = [("kids_class", "student", "date")]
+        ordering = ["-date", "student__first_name"]
+        indexes = [
+            models.Index(fields=["kids_class", "date"]),
+            models.Index(fields=["student", "date"]),
+        ]
+
+
 class KidsNotification(models.Model):
     """Kids kullanıcıları için uygulama içi + (opsiyonel) push bildirim kaydı."""
 

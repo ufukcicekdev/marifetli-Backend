@@ -50,6 +50,8 @@ from .main_site_bridge import provision_kids_parent_user, unique_username_from_e
 from .models import (
     KidsAnnouncement,
     KidsAnnouncementAttachment,
+    KidsAnnouncementRSVP,
+    KidsAttendanceRecord,
     KidsAssignment,
     KidsChallengeMember,
     KidsClass,
@@ -5578,3 +5580,237 @@ class KidsReadingStoryView(APIView):
             return Response({"detail": "Bu seviyede hikaye bulunamadı."}, status=404)
         story = grade_qs.order_by("?").first()
         return Response(ReadingStorySerializer(story).data)
+
+
+# ── Yoklama (Devam Takibi) ────────────────────────────────────────────────────
+
+class KidsAttendanceView(KidsAuthenticatedMixin, APIView):
+    """
+    GET  /api/kids/attendance/?class_id=<id>&date=YYYY-MM-DD
+         Öğretmen → o sınıfın öğrenci listesi + o günkü yoklama durumları
+         Veli    → kendi çocuklarının yoklama kaydı (class_id + date zorunlu değil, isteğe bağlı)
+    POST /api/kids/attendance/  { class_id, date, records: [{student_id, status, note?}] }
+         Öğretmen toplu yoklama kaydeder / günceller
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        class_id = request.query_params.get("class_id")
+        date_str = request.query_params.get("date")
+
+        if is_kids_teacher_or_admin_user(user):
+            if not class_id:
+                return Response({"detail": "class_id zorunludur."}, status=400)
+            kids_class = KidsClass.objects.filter(pk=class_id).first()
+            if not kids_class:
+                return Response(status=404)
+            if not is_kids_admin_user(user):
+                has_access = (
+                    kids_class.teacher_id == user.id
+                    or KidsClassTeacher.objects.filter(kids_class=kids_class, teacher=user, is_active=True).exists()
+                )
+                if not has_access:
+                    return Response(status=403)
+
+            enrollments = KidsEnrollment.objects.filter(
+                kids_class=kids_class, is_active=True
+            ).select_related("student")
+
+            records_qs = KidsAttendanceRecord.objects.filter(kids_class=kids_class)
+            if date_str:
+                records_qs = records_qs.filter(date=date_str)
+            records_map = {r.student_id: r for r in records_qs}
+
+            result = []
+            for en in enrollments:
+                rec = records_map.get(en.student_id)
+                result.append({
+                    "student_id": en.student_id,
+                    "student_name": f"{en.student.first_name} {en.student.last_name}".strip(),
+                    "student_login_name": en.student.student_login_name,
+                    "status": rec.status if rec else None,
+                    "note": rec.note if rec else "",
+                    "record_id": rec.id if rec else None,
+                })
+            return Response({"students": result, "class_id": kids_class.id, "date": date_str})
+
+        elif is_kids_parent_user(user):
+            children = KidsUser.objects.filter(parent_account=user)
+            records_qs = KidsAttendanceRecord.objects.filter(student__in=children).select_related("student", "kids_class")
+            if class_id:
+                records_qs = records_qs.filter(kids_class_id=class_id)
+            if date_str:
+                records_qs = records_qs.filter(date=date_str)
+            else:
+                from datetime import date
+                records_qs = records_qs.filter(date__gte=date.today().replace(day=1))
+            records_qs = records_qs.order_by("-date")[:60]
+            data = [
+                {
+                    "record_id": r.id,
+                    "student_id": r.student_id,
+                    "student_name": f"{r.student.first_name} {r.student.last_name}".strip(),
+                    "student_login_name": r.student.student_login_name,
+                    "class_id": r.kids_class_id,
+                    "class_name": r.kids_class.name,
+                    "date": str(r.date),
+                    "status": r.status,
+                    "note": r.note,
+                }
+                for r in records_qs
+            ]
+            return Response({"records": data})
+
+        return Response(status=403)
+
+    def post(self, request):
+        user = request.user
+        if not is_kids_teacher_or_admin_user(user):
+            return Response(status=403)
+
+        class_id = request.data.get("class_id")
+        date_str = request.data.get("date")
+        records = request.data.get("records", [])
+
+        if not class_id or not date_str:
+            return Response({"detail": "class_id ve date zorunludur."}, status=400)
+
+        kids_class = KidsClass.objects.filter(pk=class_id).first()
+        if not kids_class:
+            return Response(status=404)
+        if not is_kids_admin_user(user):
+            has_access = (
+                kids_class.teacher_id == user.id
+                or KidsClassTeacher.objects.filter(kids_class=kids_class, teacher=user, is_active=True).exists()
+            )
+            if not has_access:
+                return Response(status=403)
+
+        saved = []
+        for rec_data in records:
+            student_id = rec_data.get("student_id")
+            rec_status = rec_data.get("status", "present")
+            note = (rec_data.get("note") or "")[:300]
+            if not student_id:
+                continue
+            if rec_status not in ("present", "absent", "late", "excused"):
+                rec_status = "present"
+            if not KidsEnrollment.objects.filter(kids_class=kids_class, student_id=student_id, is_active=True).exists():
+                continue
+            att, _ = KidsAttendanceRecord.objects.update_or_create(
+                kids_class=kids_class,
+                student_id=student_id,
+                date=date_str,
+                defaults={"status": rec_status, "note": note, "recorded_by": user},
+            )
+            saved.append(att.id)
+
+            # Veli bildirim: devamsızlık durumunda
+            if rec_status in ("absent", "late"):
+                student = KidsUser.objects.filter(pk=student_id).first()
+                if student and student.parent_account_id:
+                    from .notifications_service import create_kids_notification
+                    status_label = "Gelmedi" if rec_status == "absent" else "Geç Geldi"
+                    try:
+                        create_kids_notification(
+                            recipient_user_id=student.parent_account_id,
+                            title="Yoklama Bildirimi",
+                            body=f"{student.first_name} bugün ({date_str}) sınıfta {status_label} olarak işaretlendi.",
+                            notification_type="attendance",
+                        )
+                    except Exception:
+                        pass
+
+        return Response({"saved": len(saved), "date": date_str})
+
+
+# ── RSVP (Etkinlik Katılım) ───────────────────────────────────────────────────
+
+class KidsAnnouncementRSVPView(KidsAuthenticatedMixin, APIView):
+    """
+    GET  /api/kids/announcements/<id>/rsvp/
+         Öğretmen → RSVP özetini görür (kaç evet/hayır/belki)
+         Veli     → kendi RSVP durumunu görür
+    POST /api/kids/announcements/<id>/rsvp/  { response: yes|no|maybe, student_id?, note? }
+         Veli RSVP kaydeder / günceller
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, announcement_id):
+        ann = KidsAnnouncement.objects.filter(pk=announcement_id).first()
+        if not ann:
+            return Response(status=404)
+
+        user = request.user
+        if is_kids_teacher_or_admin_user(user):
+            rsvps = KidsAnnouncementRSVP.objects.filter(announcement=ann).select_related("student", "parent_user")
+            counts = {"yes": 0, "no": 0, "maybe": 0}
+            details = []
+            for r in rsvps:
+                counts[r.response] = counts.get(r.response, 0) + 1
+                details.append({
+                    "parent_user_id": r.parent_user_id,
+                    "student_id": r.student_id,
+                    "student_name": f"{r.student.first_name} {r.student.last_name}".strip() if r.student else None,
+                    "student_login_name": r.student.student_login_name if r.student else None,
+                    "response": r.response,
+                    "note": r.note,
+                    "responded_at": r.responded_at,
+                })
+            return Response({"counts": counts, "details": details})
+
+        elif is_kids_parent_user(user):
+            my_rsvps = KidsAnnouncementRSVP.objects.filter(
+                announcement=ann, parent_user=user
+            ).select_related("student")
+            data = [
+                {
+                    "student_id": r.student_id,
+                    "student_name": f"{r.student.first_name} {r.student.last_name}".strip() if r.student else None,
+                    "response": r.response,
+                    "note": r.note,
+                    "responded_at": r.responded_at,
+                }
+                for r in my_rsvps
+            ]
+            return Response({"my_rsvps": data})
+
+        return Response(status=403)
+
+    def post(self, request, announcement_id):
+        user = request.user
+        if not is_kids_parent_user(user):
+            return Response({"detail": "Yalnızca veliler RSVP verebilir."}, status=403)
+
+        ann = KidsAnnouncement.objects.filter(pk=announcement_id).first()
+        if not ann:
+            return Response(status=404)
+        if ann.category != KidsAnnouncement.Category.EVENT:
+            return Response({"detail": "Bu duyuru bir etkinlik değil."}, status=400)
+
+        response_val = request.data.get("response")
+        if response_val not in ("yes", "no", "maybe"):
+            return Response({"detail": "response: yes | no | maybe olmalıdır."}, status=400)
+
+        student_id = request.data.get("student_id")
+        student = None
+        if student_id:
+            student = KidsUser.objects.filter(pk=student_id, parent_account=user).first()
+
+        note = (request.data.get("note") or "")[:300]
+        rsvp, created = KidsAnnouncementRSVP.objects.update_or_create(
+            announcement=ann,
+            parent_user=user,
+            student=student,
+            defaults={"response": response_val, "note": note},
+        )
+        return Response(
+            {
+                "response": rsvp.response,
+                "note": rsvp.note,
+                "responded_at": rsvp.responded_at,
+                "created": created,
+            },
+            status=201 if created else 200,
+        )

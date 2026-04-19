@@ -254,6 +254,8 @@ urlpatterns = [
         "announcements/<int:announcement_id>/attachments/<int:attachment_id>/",
         views.KidsAnnouncementAttachmentDetailView.as_view(),
     ),
+    path("announcements/<int:announcement_id>/rsvp/", views.KidsAnnouncementRSVPView.as_view()),
+    path("attendance/", views.KidsAttendanceView.as_view()),
     path(
         "student/upload-submission-image/",
         views.KidsStudentSubmissionImageUploadView.as_view(),
