@@ -5517,12 +5517,16 @@ class KidsTtsView(APIView):
         if not text:
             return HttpResponseBadRequest('text required')
 
+        lang = (request.GET.get('lang') or 'tr').strip().lower()
+        if lang not in ('tr', 'en'):
+            lang = 'tr'
+
         cache_dir = self._get_cache_dir()
-        key = hashlib.md5(f'tr:{text}'.encode()).hexdigest()
+        key = hashlib.md5(f'{lang}:{text}'.encode()).hexdigest()
         path = os.path.join(cache_dir, f'{key}.mp3')
 
         if not os.path.exists(path):
-            tts = gTTS(text=text, lang='tr', slow=False)
+            tts = gTTS(text=text, lang=lang, slow=False)
             tts.save(path)
 
         return FileResponse(open(path, 'rb'), content_type='audio/mpeg')
