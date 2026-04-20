@@ -52,6 +52,9 @@ from .models import (
     KidsAnnouncementAttachment,
     KidsAnnouncementRSVP,
     KidsAttendanceRecord,
+    KidsDailyQuestLog,
+    KidsFeedback,
+    KidsGradeEntry,
     KidsAssignment,
     KidsChallengeMember,
     KidsClass,
@@ -2078,6 +2081,29 @@ class KidsProfilePhotoView(KidsAuthenticatedMixin, APIView):
             return Response(_account_kids_payload(u, request))
         u.profile_picture = f
         u.save(update_fields=["profile_picture", "updated_at"])
+        return Response(_kids_user_payload(u, request))
+
+
+_VALID_AVATAR_KEYS = {"owl", "cat", "fox", "panda", "lion", "bunny", "bear", "dragon"}
+
+
+class KidsAvatarView(KidsAuthenticatedMixin, APIView):
+    """PATCH {avatar_key: 'owl'} — öğrenci avatar seçimi."""
+
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        u = request.user
+        if not isinstance(u, KidsUser) or u.role != KidsUserRole.STUDENT:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        key = (request.data.get("avatar_key") or "").strip().lower()
+        if key not in _VALID_AVATAR_KEYS:
+            return Response(
+                {"detail": f"Geçersiz avatar. Seçenekler: {', '.join(sorted(_VALID_AVATAR_KEYS))}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        u.avatar_key = key
+        u.save(update_fields=["avatar_key"])
         return Response(_kids_user_payload(u, request))
 
 
@@ -5813,4 +5839,369 @@ class KidsAnnouncementRSVPView(KidsAuthenticatedMixin, APIView):
                 "created": created,
             },
             status=201 if created else 200,
+        )
+
+
+# ── Günlük Görev ──────────────────────────────────────────────────────────────
+
+QUEST_TYPES = ["game_play", "homework_submit", "test_complete", "read_story"]
+
+def _quests_for_date(date):
+    """
+    Haftanın günü + hafta numarasına göre 3 deterministik görev seçer.
+    Her hafta farklı kombinasyon döner.
+    """
+    import datetime as _dt
+    week_num = date.isocalendar()[1]
+    day_num = date.weekday()  # 0=Mon … 6=Sun
+    seed = (week_num * 7 + day_num) % 4
+    # 4 tipi 3'er kombinasyonla döndür (toplam 4 kombinasyon)
+    combos = [
+        ["game_play", "homework_submit", "test_complete"],
+        ["game_play", "homework_submit", "read_story"],
+        ["game_play", "test_complete", "read_story"],
+        ["homework_submit", "test_complete", "read_story"],
+    ]
+    return combos[seed]
+
+
+def _check_quest_done(student, quest_type, date):
+    """Öğrencinin o gün görev tipini tamamlayıp tamamlamadığını kontrol eder."""
+    import datetime as _dt
+    day_start = timezone.make_aware(_dt.datetime.combine(date, _dt.time.min))
+    day_end = timezone.make_aware(_dt.datetime.combine(date, _dt.time.max))
+
+    if quest_type == "game_play":
+        return KidsGameSession.objects.filter(
+            student=student,
+            status="completed",
+            created_at__range=(day_start, day_end),
+        ).exists()
+    if quest_type == "homework_submit":
+        return KidsHomeworkSubmission.objects.filter(
+            student=student,
+            created_at__range=(day_start, day_end),
+        ).exists()
+    if quest_type == "test_complete":
+        return KidsTestAttempt.objects.filter(
+            student=student,
+            submitted_at__range=(day_start, day_end),
+        ).exists()
+    if quest_type == "read_story":
+        return KidsGameSession.objects.filter(
+            student=student,
+            status="completed",
+            game__slug__in=["hikaye-okuma", "kelime-okuma", "ingilizce-kelimeler"],
+            created_at__range=(day_start, day_end),
+        ).exists()
+    return False
+
+
+def _compute_streak(student, today):
+    """Ardışık all_completed=True gün sayısı (bugün dahil)."""
+    streak = 0
+    check = today
+    while True:
+        log = KidsDailyQuestLog.objects.filter(student=student, date=check, all_completed=True).first()
+        if not log:
+            break
+        streak += 1
+        check = check - timezone.timedelta(days=1)
+        if streak > 365:
+            break
+    return streak
+
+
+class KidsDailyQuestView(KidsAuthenticatedMixin, APIView):
+    """
+    GET  /api/kids/student/daily-quests/
+         Bugünkü 3 görevi ve tamamlanma durumunu + streak döner.
+    POST /api/kids/student/daily-quests/refresh/
+         Görev durumunu yeniden hesaplayıp kaydeder (oyun bitince çağrılır).
+    """
+    authentication_classes = [KidsJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def _build_response(self, student, today):
+        types = _quests_for_date(today)
+        quests = []
+        all_done = True
+        for qt in types:
+            done = _check_quest_done(student, qt, today)
+            if not done:
+                all_done = False
+            quests.append({"type": qt, "done": done})
+
+        log, _ = KidsDailyQuestLog.objects.get_or_create(
+            student=student,
+            date=today,
+            defaults={"quests_json": quests, "all_completed": all_done, "streak": 0},
+        )
+        if log.quests_json != quests or log.all_completed != all_done:
+            log.quests_json = quests
+            log.all_completed = all_done
+            log.save(update_fields=["quests_json", "all_completed", "updated_at"])
+
+        streak = _compute_streak(student, today)
+        if log.streak != streak:
+            log.streak = streak
+            log.save(update_fields=["streak", "updated_at"])
+
+        return {"quests": quests, "all_completed": all_done, "streak": streak, "date": str(today)}
+
+    def get(self, request):
+        if not is_kids_student_user(request.user):
+            return Response({"detail": "Yalnızca öğrenciler erişebilir."}, status=403)
+        today = timezone.localdate()
+        return Response(self._build_response(request.user, today))
+
+    def post(self, request):
+        if not is_kids_student_user(request.user):
+            return Response({"detail": "Yalnızca öğrenciler erişebilir."}, status=403)
+        today = timezone.localdate()
+        return Response(self._build_response(request.user, today))
+
+
+# ── Not Defteri ───────────────────────────────────────────────────────────────
+
+class KidsGradeEntryView(KidsAuthenticatedMixin, APIView):
+    """
+    GET  /api/kids/grades/?class_id=<id>&period=<str>
+         Öğretmen → sınıf+dönem not listesi (student_id bazında gruplu)
+         Veli     → kendi çocuklarının notları (?student_id=<id> opsiyonel)
+    POST /api/kids/grades/  { class_id, student_id, subject_name, period, grade_value, note? }
+         Öğretmen toplu not kaydeder (upsert)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+
+        if is_kids_teacher_or_admin_user(user):
+            class_id = request.query_params.get("class_id")
+            if not class_id:
+                return Response({"detail": "class_id zorunludur."}, status=400)
+            kids_class = KidsClass.objects.filter(pk=class_id).first()
+            if not kids_class:
+                return Response(status=404)
+            if not is_kids_admin_user(user):
+                has_access = (
+                    kids_class.teacher_id == user.id
+                    or KidsClassTeacher.objects.filter(kids_class=kids_class, teacher=user, is_active=True).exists()
+                )
+                if not has_access:
+                    return Response(status=403)
+
+            qs = KidsGradeEntry.objects.filter(kids_class=kids_class).select_related("student")
+            period = request.query_params.get("period")
+            if period:
+                qs = qs.filter(period=period)
+
+            data = [
+                {
+                    "id": e.id,
+                    "student_id": e.student_id,
+                    "student_name": f"{e.student.first_name} {e.student.last_name}".strip(),
+                    "student_login_name": e.student.student_login_name,
+                    "subject_name": e.subject_name,
+                    "period": e.period,
+                    "grade_value": e.grade_value,
+                    "note": e.note,
+                    "updated_at": e.updated_at,
+                }
+                for e in qs
+            ]
+            return Response({"grades": data})
+
+        elif is_kids_parent_user(user):
+            children = KidsUser.objects.filter(parent_account=user)
+            student_id = request.query_params.get("student_id")
+            qs = KidsGradeEntry.objects.filter(student__in=children).select_related("student", "kids_class")
+            if student_id:
+                qs = qs.filter(student_id=student_id)
+            data = [
+                {
+                    "id": e.id,
+                    "student_id": e.student_id,
+                    "student_name": f"{e.student.first_name} {e.student.last_name}".strip(),
+                    "student_login_name": e.student.student_login_name,
+                    "class_id": e.kids_class_id,
+                    "class_name": e.kids_class.name,
+                    "subject_name": e.subject_name,
+                    "period": e.period,
+                    "grade_value": e.grade_value,
+                    "note": e.note,
+                    "updated_at": e.updated_at,
+                }
+                for e in qs
+            ]
+            return Response({"grades": data})
+
+        return Response(status=403)
+
+    def post(self, request):
+        user = request.user
+        if not is_kids_teacher_or_admin_user(user):
+            return Response(status=403)
+
+        entries = request.data.get("entries")
+        if not isinstance(entries, list):
+            # Tekil kayıt
+            entries = [request.data]
+
+        class_id = request.data.get("class_id") or (entries[0].get("class_id") if entries else None)
+        kids_class = KidsClass.objects.filter(pk=class_id).first() if class_id else None
+        if not kids_class:
+            return Response({"detail": "class_id geçersiz."}, status=400)
+        if not is_kids_admin_user(user):
+            has_access = (
+                kids_class.teacher_id == user.id
+                or KidsClassTeacher.objects.filter(kids_class=kids_class, teacher=user, is_active=True).exists()
+            )
+            if not has_access:
+                return Response(status=403)
+
+        saved = []
+        errors = []
+        for item in entries:
+            student_id = item.get("student_id")
+            subject = (item.get("subject_name") or "").strip()[:120]
+            period = (item.get("period") or "1. Dönem").strip()[:40]
+            note = (item.get("note") or "").strip()[:300]
+            try:
+                grade_val = float(item.get("grade_value", 0))
+                grade_val = max(0.0, min(100.0, grade_val))
+            except (TypeError, ValueError):
+                errors.append({"student_id": student_id, "error": "grade_value geçersiz"})
+                continue
+            if not student_id or not subject:
+                errors.append({"student_id": student_id, "error": "student_id ve subject_name zorunludur"})
+                continue
+            if not KidsEnrollment.objects.filter(kids_class=kids_class, student_id=student_id, is_active=True).exists():
+                errors.append({"student_id": student_id, "error": "Öğrenci sınıfta değil"})
+                continue
+            entry, _ = KidsGradeEntry.objects.update_or_create(
+                kids_class=kids_class,
+                student_id=student_id,
+                subject_name=subject,
+                period=period,
+                defaults={"grade_value": grade_val, "note": note, "recorded_by": user},
+            )
+            saved.append(entry.id)
+
+        return Response({"saved": len(saved), "errors": errors}, status=201 if saved else 400)
+
+
+class KidsGradeDetailView(KidsAuthenticatedMixin, APIView):
+    """PATCH/DELETE /api/kids/grades/<id>/"""
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        user = request.user
+        if not is_kids_teacher_or_admin_user(user):
+            return Response(status=403)
+        entry = KidsGradeEntry.objects.filter(pk=pk).first()
+        if not entry:
+            return Response(status=404)
+        if not is_kids_admin_user(user):
+            has_access = (
+                entry.kids_class.teacher_id == user.id
+                or KidsClassTeacher.objects.filter(kids_class=entry.kids_class, teacher=user, is_active=True).exists()
+            )
+            if not has_access:
+                return Response(status=403)
+        if "grade_value" in request.data:
+            try:
+                entry.grade_value = max(0.0, min(100.0, float(request.data["grade_value"])))
+            except (TypeError, ValueError):
+                return Response({"detail": "grade_value geçersiz"}, status=400)
+        if "note" in request.data:
+            entry.note = str(request.data["note"])[:300]
+        if "subject_name" in request.data:
+            entry.subject_name = str(request.data["subject_name"])[:120]
+        if "period" in request.data:
+            entry.period = str(request.data["period"])[:40]
+        entry.recorded_by = user
+        entry.save()
+        return Response({"id": entry.id, "grade_value": entry.grade_value, "note": entry.note})
+
+    def delete(self, request, pk):
+        user = request.user
+        if not is_kids_teacher_or_admin_user(user):
+            return Response(status=403)
+        entry = KidsGradeEntry.objects.filter(pk=pk).first()
+        if not entry:
+            return Response(status=404)
+        if not is_kids_admin_user(user):
+            has_access = (
+                entry.kids_class.teacher_id == user.id
+                or KidsClassTeacher.objects.filter(kids_class=entry.kids_class, teacher=user, is_active=True).exists()
+            )
+            if not has_access:
+                return Response(status=403)
+        entry.delete()
+        return Response(status=204)
+
+
+class KidsFeedbackView(KidsAuthenticatedMixin, APIView):
+    """POST /api/kids/feedback/ — veli/öğretmen geri bildirimi gönderir.
+    GET  /api/kids/feedback/ — kendi gönderdiği geri bildirimleri listeler (son 20).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if not isinstance(user, MainUser):
+            return Response({"results": []})
+        qs = KidsFeedback.objects.filter(user=user).order_by("-created_at")[:20]
+        data = [
+            {
+                "id": f.id,
+                "role": f.role,
+                "category": f.category,
+                "rating": f.rating,
+                "message": f.message,
+                "created_at": f.created_at.isoformat(),
+            }
+            for f in qs
+        ]
+        return Response({"results": data})
+
+    def post(self, request):
+        user = request.user
+        message = (request.data.get("message") or "").strip()
+        if not message:
+            return Response({"detail": "Mesaj boş olamaz."}, status=status.HTTP_400_BAD_REQUEST)
+        if len(message) > 2000:
+            return Response({"detail": "Mesaj en fazla 2000 karakter olabilir."}, status=status.HTTP_400_BAD_REQUEST)
+
+        category = request.data.get("category", "general")
+        if category not in {"general", "bug", "suggestion", "praise"}:
+            category = "general"
+
+        rating = request.data.get("rating")
+        if rating is not None:
+            try:
+                rating = max(1, min(5, int(rating)))
+            except (TypeError, ValueError):
+                rating = None
+
+        role = "other"
+        if isinstance(user, MainUser):
+            r = (user.kids_portal_role or "").strip()
+            if r == KidsPortalRole.TEACHER:
+                role = "teacher"
+            elif r == KidsPortalRole.PARENT:
+                role = "parent"
+
+        fb = KidsFeedback.objects.create(
+            user=user if isinstance(user, MainUser) else None,
+            role=role,
+            category=category,
+            rating=rating,
+            message=message,
+        )
+        return Response(
+            {"id": fb.id, "created_at": fb.created_at.isoformat()},
+            status=status.HTTP_201_CREATED,
         )

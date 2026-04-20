@@ -14,7 +14,17 @@ from django.utils import timezone
 from core.i18n_catalog import translate
 from core.i18n_resolve import language_for_kids_recipient
 
-from kids.models import KidsAssignment, KidsEnrollment, KidsNotification, KidsUser, KidsUserRole
+from kids.models import (
+    KidsAssignment,
+    KidsAttendanceRecord,
+    KidsEnrollment,
+    KidsGameSession,
+    KidsHomeworkSubmission,
+    KidsNotification,
+    KidsTestAttempt,
+    KidsUser,
+    KidsUserRole,
+)
 from kids.notifications_service import create_kids_notification, notify_students_new_assignment
 
 logger = logging.getLogger(__name__)
@@ -160,3 +170,103 @@ def kindergarten_monthly_absence_digest():
                     student_id,
                     kc.pk,
                 )
+
+
+@shared_task
+def weekly_parent_report():
+    """
+    Her Pazartesi 08:30 çalışır.
+    Geçen haftanın (Pazartesi–Pazar) öğrenci istatistiklerini toplar,
+    her veliye uygulama içi bildirim + e-posta gönderir.
+    """
+    from emails.services import EmailService
+
+    today = timezone.localdate()
+    # Geçen haftanın başı (Pazartesi) ve sonu (Pazar)
+    week_end = today - dt.timedelta(days=today.weekday() + 1)   # geçen Pazar
+    week_start = week_end - dt.timedelta(days=6)                # geçen Pazartesi
+
+    week_start_dt = timezone.make_aware(dt.datetime.combine(week_start, dt.time.min))
+    week_end_dt = timezone.make_aware(dt.datetime.combine(week_end, dt.time.max))
+
+    # Bağlı velisi olan tüm öğrenciler
+    students = KidsUser.objects.filter(
+        role=KidsUserRole.STUDENT,
+        parent_account__isnull=False,
+        is_active=True,
+    ).select_related("parent_account")
+
+    for student in students:
+        parent = student.parent_account
+        if not parent or not parent.email:
+            continue
+        try:
+            hw_count = KidsHomeworkSubmission.objects.filter(
+                student=student,
+                created_at__range=(week_start_dt, week_end_dt),
+            ).count()
+
+            test_attempts = KidsTestAttempt.objects.filter(
+                student=student,
+                submitted_at__range=(week_start_dt, week_end_dt),
+            )
+            test_count = test_attempts.count()
+            avg_score = None
+            if test_count:
+                scores = [a.score for a in test_attempts if a.score is not None]
+                avg_score = round(sum(scores) / len(scores), 1) if scores else None
+
+            sessions = KidsGameSession.objects.filter(
+                student=student,
+                status="completed",
+                created_at__range=(week_start_dt, week_end_dt),
+            )
+            game_minutes = sum(
+                (s.duration_seconds or 0) for s in sessions
+            ) // 60
+
+            attendance_qs = KidsAttendanceRecord.objects.filter(
+                student=student,
+                date__range=(week_start, week_end),
+            )
+            absent_days = attendance_qs.filter(status="absent").count()
+            present_days = attendance_qs.filter(status="present").count()
+            school_days = attendance_qs.count() or 5  # kayıt yoksa 5 varsay
+
+            # Hiç aktivite yoksa bildirim gönderme
+            if hw_count == 0 and test_count == 0 and game_minutes == 0:
+                continue
+
+            student_name = student.first_name or student.student_login_name or "Öğrenci"
+
+            summary = (
+                f"{student_name}: ödev {hw_count}, test {test_count}, oyun {game_minutes} dk"
+            )
+
+            # Uygulama içi bildirim (kısa)
+            create_kids_notification(
+                recipient_user=parent,
+                notification_type=KidsNotification.NotificationType.GENERAL,
+                message=f"Haftalık özet: {summary}",
+            )
+
+            # E-posta (güzel tablo)
+            try:
+                EmailService.send_weekly_report_email(
+                    parent=parent,
+                    student_name=student_name,
+                    week_start=week_start,
+                    week_end=week_end,
+                    hw_count=hw_count,
+                    test_count=test_count,
+                    avg_score=avg_score,
+                    game_minutes=game_minutes,
+                    present_days=present_days,
+                    school_days=school_days,
+                    absent_days=absent_days,
+                )
+            except Exception:
+                logger.exception("weekly_parent_report email failed parent=%s student=%s", parent.id, student.id)
+
+        except Exception:
+            logger.exception("weekly_parent_report failed student=%s", student.id)

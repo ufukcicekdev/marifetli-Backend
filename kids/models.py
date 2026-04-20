@@ -38,6 +38,12 @@ class KidsUser(models.Model):
         blank=True,
         null=True,
     )
+    avatar_key = models.CharField(
+        max_length=40,
+        blank=True,
+        default="",
+        help_text="Preset avatar slug: owl, cat, fox, panda, lion, bunny, bear, dragon",
+    )
     role = models.CharField(
         max_length=20,
         choices=KidsUserRole.choices,
@@ -2063,6 +2069,72 @@ class ReadingStoryQuestion(models.Model):
         return self.question[:80]
 
 
+class KidsDailyQuestLog(models.Model):
+    """Öğrenci bazlı günlük görev tamamlama kaydı."""
+
+    student = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        related_name="daily_quest_logs",
+        limit_choices_to={"role": KidsUserRole.STUDENT},
+    )
+    date = models.DateField(db_index=True)
+    quests_json = models.JSONField(
+        default=list,
+        help_text='[{"type": "game_play", "done": true}, ...]',
+    )
+    all_completed = models.BooleanField(default=False, db_index=True)
+    streak = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_daily_quest_logs"
+        unique_together = [("student", "date")]
+        ordering = ["-date"]
+        indexes = [
+            models.Index(fields=["student", "all_completed"]),
+        ]
+
+
+class KidsGradeEntry(models.Model):
+    """Öğretmenin öğrenci bazlı ders notu girişi."""
+
+    kids_class = models.ForeignKey(
+        KidsClass,
+        on_delete=models.CASCADE,
+        related_name="grade_entries",
+    )
+    student = models.ForeignKey(
+        KidsUser,
+        on_delete=models.CASCADE,
+        related_name="grade_entries",
+        limit_choices_to={"role": KidsUserRole.STUDENT},
+    )
+    subject_name = models.CharField("ders adı", max_length=120)
+    period = models.CharField("dönem", max_length=40, default="1. Dönem")
+    grade_value = models.FloatField("not (0-100)")
+    note = models.CharField("açıklama", max_length=300, blank=True)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="kids_grade_entries_recorded",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "kids_grade_entries"
+        unique_together = [("kids_class", "student", "subject_name", "period")]
+        ordering = ["subject_name", "period"]
+        indexes = [
+            models.Index(fields=["kids_class", "period"]),
+            models.Index(fields=["student", "period"]),
+        ]
+
+
 class MebSchoolDirectory(models.Model):
     """
     MEB okul listesi (meb.gov.tr). İl, ilçe ve okul adı ayrıştırılarak saklanır.
@@ -2091,3 +2163,38 @@ class MebSchoolDirectory(models.Model):
 
     def __str__(self):
         return f"{self.province} / {self.district} — {self.name[:60]}"
+
+
+class KidsFeedback(models.Model):
+    """Veli/öğretmen geri bildirimi — modal veya /geribildirim sayfasından."""
+
+    class Role(models.TextChoices):
+        PARENT = "parent", "Veli"
+        TEACHER = "teacher", "Öğretmen"
+        OTHER = "other", "Diğer"
+
+    class Category(models.TextChoices):
+        GENERAL = "general", "Genel"
+        BUG = "bug", "Hata bildirimi"
+        SUGGESTION = "suggestion", "Öneri"
+        PRAISE = "praise", "Övgü"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="kids_feedbacks",
+    )
+    role = models.CharField(max_length=20, choices=Role.choices, default=Role.OTHER)
+    category = models.CharField(max_length=20, choices=Category.choices, default=Category.GENERAL)
+    rating = models.PositiveSmallIntegerField(null=True, blank=True, help_text="1-5 yıldız")
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "kids_feedback"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.role} | {self.category} | {self.created_at:%Y-%m-%d}"

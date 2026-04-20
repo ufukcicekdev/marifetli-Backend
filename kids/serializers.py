@@ -346,6 +346,7 @@ class KidsUserSerializer(serializers.ModelSerializer):
             "role",
             "created_at",
             "profile_picture",
+            "avatar_key",
             "growth_points",
             "growth_stage",
             "student_login_name",

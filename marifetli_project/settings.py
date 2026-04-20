@@ -677,6 +677,10 @@ CELERY_BEAT_SCHEDULE = {
         "task": "blog.generate_blog_from_queue",
         "schedule": crontab(minute=30, hour=10, day_of_month="*/2"),  # Iki gunde bir
     },
+    "kids-weekly-parent-report": {
+        "task": "kids.tasks.weekly_parent_report",
+        "schedule": crontab(hour=8, minute=30, day_of_week=1),  # Her Pazartesi 08:30
+    },
 }
 
 # Loglama: varsayılan konsola gider; LOG_DIR verilirse dosyaya; logs app ile DB'ye yazılır.

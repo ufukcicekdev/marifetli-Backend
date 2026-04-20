@@ -71,6 +71,8 @@ urlpatterns = [
     path("admin/achievement-settings/", views.KidsAdminAchievementSettingsView.as_view()),
     path("config/", views.KidsAppConfigView.as_view()),
     path("profile/photo/", views.KidsProfilePhotoView.as_view()),
+    path("profile/avatar/", views.KidsAvatarView.as_view()),
+    path("feedback/", views.KidsFeedbackView.as_view()),
     path("auth/accept-invite/", views.KidsAcceptInviteView.as_view()),
     path("auth/invite-preview/", views.KidsInvitePreviewView.as_view()),
     path("schools/", views.KidsSchoolListCreateView.as_view()),
@@ -256,6 +258,9 @@ urlpatterns = [
     ),
     path("announcements/<int:announcement_id>/rsvp/", views.KidsAnnouncementRSVPView.as_view()),
     path("attendance/", views.KidsAttendanceView.as_view()),
+    path("student/daily-quests/", views.KidsDailyQuestView.as_view()),
+    path("grades/", views.KidsGradeEntryView.as_view()),
+    path("grades/<int:pk>/", views.KidsGradeDetailView.as_view()),
     path(
         "student/upload-submission-image/",
         views.KidsStudentSubmissionImageUploadView.as_view(),

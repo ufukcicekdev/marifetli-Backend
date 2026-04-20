@@ -511,6 +511,41 @@ class EmailService:
         )
 
     @staticmethod
+    def send_weekly_report_email(parent, *, student_name, week_start, week_end,
+                                  hw_count, test_count, avg_score, game_minutes,
+                                  present_days, school_days, absent_days):
+        """Haftalık veli raporu — güzel HTML tablo şablonu."""
+        from django.template.loader import render_to_string
+        context = {
+            "student_name": student_name,
+            "week_start": str(week_start),
+            "week_end": str(week_end),
+            "hw_count": hw_count,
+            "test_count": test_count,
+            "avg_score": avg_score,
+            "game_minutes": game_minutes,
+            "present_days": present_days,
+            "school_days": school_days,
+            "absent_days": absent_days,
+            "frontend_url": getattr(settings, "FRONTEND_URL", "https://marifetli.com"),
+        }
+        html = render_to_string("emails/kids_weekly_report_email.html", context)
+        subject = f"Haftalık Öğrenci Özeti — {student_name}"
+        plain = (
+            f"{student_name} için haftalık özet ({week_start} – {week_end})\n"
+            f"Ödev: {hw_count}  |  Test: {test_count}"
+            + (f" (ort. {avg_score})" if avg_score is not None else "")
+            + f"  |  Oyun: {game_minutes} dk  |  Devam: {present_days}/{school_days}"
+        )
+        return EmailService.send_email(
+            recipient=parent.email,
+            subject=subject,
+            html_content=html,
+            text_content=plain,
+            metadata={"weekly_report": True},
+        )
+
+    @staticmethod
     def send_notification_email(user, message, notification_type='general', *, language=None):
         """Genel bildirim e-postası — konu ve şablon dili alıcı tercihine göre."""
         lang = normalize_lang(language) if language else language_from_user(user)

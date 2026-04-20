@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Haftalık Öğrenci Raporu</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #f3f4f6;
+      margin: 0;
+      padding: 20px;
+      color: #374151;
+    }
+    .wrapper { max-width: 580px; margin: 0 auto; }
+    .card {
+      background: #ffffff;
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%);
+      padding: 28px 32px 24px;
+      text-align: center;
+    }
+    .header .logo { font-size: 26px; font-weight: 900; color: #fff; letter-spacing: -0.5px; }
+    .header .subtitle { color: #e9d5ff; font-size: 13px; margin-top: 4px; }
+    /* Student name band */
+    .student-band {
+      background: #faf5ff;
+      border-bottom: 2px solid #ede9fe;
+      padding: 18px 32px;
+    }
+    .student-band .week-label { font-size: 12px; color: #9ca3af; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+    .student-band .student-name { font-size: 22px; font-weight: 900; color: #6d28d9; margin-top: 2px; }
+    .student-band .week-range { font-size: 13px; color: #6b7280; margin-top: 4px; }
+    /* Stats grid */
+    .stats { padding: 24px 32px; }
+    .stats-grid {
+      display: table;
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0 8px;
+    }
+    .stat-row { display: table-row; }
+    .stat-icon {
+      display: table-cell;
+      width: 40px;
+      text-align: center;
+      font-size: 20px;
+      vertical-align: middle;
+      padding: 12px 8px 12px 0;
+    }
+    .stat-label {
+      display: table-cell;
+      font-size: 14px;
+      color: #6b7280;
+      font-weight: 600;
+      vertical-align: middle;
+      padding: 12px 8px;
+    }
+    .stat-value {
+      display: table-cell;
+      font-size: 18px;
+      font-weight: 900;
+      color: #111827;
+      text-align: right;
+      vertical-align: middle;
+      padding: 12px 0;
+    }
+    .stat-divider {
+      display: table-row;
+      height: 1px;
+    }
+    .stat-divider td {
+      display: table-cell;
+      border-bottom: 1px solid #f3f4f6;
+      padding: 0;
+      colspan: 3;
+    }
+    /* Score badge */
+    .score-badge {
+      display: inline-block;
+      background: #ecfdf5;
+      color: #059669;
+      border-radius: 999px;
+      padding: 2px 10px;
+      font-size: 13px;
+      font-weight: 700;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .score-badge.warn { background: #fef3c7; color: #d97706; }
+    /* Absent warning */
+    .absent-box {
+      margin: 0 32px 20px;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 12px;
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .absent-box .icon { font-size: 20px; }
+    .absent-box .text { font-size: 14px; color: #b91c1c; font-weight: 700; }
+    /* CTA */
+    .cta-section { padding: 8px 32px 28px; text-align: center; }
+    .cta-btn {
+      display: inline-block;
+      background: linear-gradient(135deg, #7c3aed, #a855f7);
+      color: #ffffff !important;
+      text-decoration: none;
+      padding: 13px 36px;
+      border-radius: 999px;
+      font-weight: 800;
+      font-size: 15px;
+      letter-spacing: 0.01em;
+    }
+    /* Footer */
+    .footer {
+      background: #f9fafb;
+      border-top: 1px solid #e5e7eb;
+      padding: 16px 32px;
+      text-align: center;
+      font-size: 12px;
+      color: #9ca3af;
+    }
+  </style>
+</head>
+<body>
+<div class="wrapper">
+  <div class="card">
+
+    <!-- Header -->
+    <div class="header">
+      <div class="logo">🦉 Marifetli</div>
+      <div class="subtitle">Haftalık Öğrenci Raporu</div>
+    </div>
+
+    <!-- Student name + week -->
+    <div class="student-band">
+      <div class="week-label">Haftalık Özet</div>
+      <div class="student-name">{{ student_name }}</div>
+      <div class="week-range">📅 {{ week_start }} – {{ week_end }}</div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats">
+      <table class="stats-grid" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+          <td class="stat-icon">📚</td>
+          <td class="stat-label">Tamamlanan Ödev</td>
+          <td class="stat-value">{{ hw_count }}</td>
+        </tr>
+        <tr><td colspan="3" style="padding:0;border-bottom:1px solid #f3f4f6;"></td></tr>
+        <tr>
+          <td class="stat-icon">📝</td>
+          <td class="stat-label">
+            Tamamlanan Test
+            {% if avg_score is not none %}
+              <span class="score-badge {% if avg_score >= 70 %}{% else %}warn{% endif %}">
+                Ort. {{ avg_score }}
+              </span>
+            {% endif %}
+          </td>
+          <td class="stat-value">{{ test_count }}</td>
+        </tr>
+        <tr><td colspan="3" style="padding:0;border-bottom:1px solid #f3f4f6;"></td></tr>
+        <tr>
+          <td class="stat-icon">🎮</td>
+          <td class="stat-label">Oyun Süresi</td>
+          <td class="stat-value">{{ game_minutes }} dk</td>
+        </tr>
+        <tr><td colspan="3" style="padding:0;border-bottom:1px solid #f3f4f6;"></td></tr>
+        <tr>
+          <td class="stat-icon">✅</td>
+          <td class="stat-label">Yoklama (devam)</td>
+          <td class="stat-value">{{ present_days }} / {{ school_days }} gün</td>
+        </tr>
+      </table>
+    </div>
+
+    {% if absent_days > 0 %}
+    <div class="absent-box">
+      <span class="icon">⚠️</span>
+      <span class="text">Bu hafta {{ absent_days }} gün devamsızlık kaydedildi.</span>
+    </div>
+    {% endif %}
+
+    <!-- CTA -->
+    <div class="cta-section">
+      <a href="{{ frontend_url }}" class="cta-btn">Platforma Git →</a>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+      <p>Bu e-posta Marifetli platformu tarafından otomatik olarak gönderilmiştir.</p>
+      <p>© 2026 Marifetli · Tüm hakları saklıdır.</p>
+    </div>
+
+  </div>
+</div>
+</body>
+</html>
